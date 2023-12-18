@@ -80,6 +80,14 @@ namespace Sony {
         private dGetCaptureStatus fGetCaptureStatus;
         private dCancelCapture fCancelCapture;
         private dSetExposureTime fSetExposureTime;
+
+        // Focus
+        private dGetLensCount fGetLensCount;
+        private dGetLensInfo fGetLensInfo;
+        private dSetAttachedLens fSetAttachedLens;
+        private dSetFocusPosition fSetFocusPosition;
+        private dGetFocusPosition fGetFocusPosition;
+        private dGetFocusLimit fGetFocusLimit;
 #pragma warning restore 0649
 
         private string[] DllFunctions = {
@@ -92,6 +100,8 @@ namespace Sony {
             "GetPreviewImage",
             "StartCapture", "GetCaptureStatus", "CancelCapture",
             "SetExposureTime",
+            "GetLensCount", "GetLensInfo", "SetAttachedLens",
+            "SetFocusPosition", "GetFocusPosition", "GetFocusLimit",
         };
 
         internal SonyMTPCameraDll() {
@@ -382,6 +392,45 @@ namespace Sony {
                 throw new SonyException("Problem setting property " + propertyId.ToString() + " to " + value.ToString());
             }
         }
+
+        public int GetLensCount() {
+            return (int)fGetLensCount();
+        }
+
+        public LensInfo GetLensInfo(uint index) {
+            LensInfo info = new LensInfo();
+
+            uint hr = fGetLensInfo(index, ref info);
+
+            if (hr != ERROR_SUCCESS) {
+                throw new SonyException($"Unable to get lens info for id {index}, error {hr}");
+            }
+
+            return info;
+        }
+
+        public void SetAttachedLens(UInt32 hCamera, string lensId) {
+            if (fSetAttachedLens(hCamera, lensId) != ERROR_SUCCESS) {
+                throw new SonyException($"Problem setting attached lens '{lensId}'.");
+            }
+        }
+
+        public UInt32 GetFocusPosition(UInt32 hCamera) {
+            return fGetFocusPosition(hCamera);
+        }
+
+        public void SetFocusPosition(UInt32 hCamera, UInt32 focusPosition) {
+//            Logger.Info($"Request to set focus position to {focusPosition} for hCamera {hCamera:x}");
+            UInt32 hr = fSetFocusPosition(hCamera, ref focusPosition);
+
+            if (hr != ERROR_SUCCESS) {
+                throw new SonyException($"Problem setting focus position to {focusPosition}, error {hr}");
+            }
+        }
+
+        public UInt32 GetFocusLimit(UInt32 hCamera) {
+            return fGetFocusLimit(hCamera);
+        }
         #endregion
 
         #region Delegate definitions
@@ -408,7 +457,7 @@ namespace Sony {
         internal delegate UInt32 dGetCameraInfo(UInt32 hCamera, ref CameraInfo Data, UInt32 Flags);
 
         // Focus
-        internal delegate UInt32 dSetFocusPosition(UInt32 hCamera, UInt32 position);
+        internal delegate UInt32 dSetFocusPosition(UInt32 hCamera, ref UInt32 position);
         internal delegate UInt32 dGetFocusPosition(UInt32 hCamera);
         internal delegate UInt32 dGetFocusLimit(UInt32 hCamera);
 
@@ -416,6 +465,6 @@ namespace Sony {
         internal delegate UInt32 dGetLensInfo(UInt32 offset, ref LensInfo info);
         internal delegate UInt32 dSetAttachedLens(UInt32 hCamera, [MarshalAs(UnmanagedType.LPWStr)] string lensId);
         #endregion
-    }
-    #endregion
+}
+#endregion
 }

@@ -13,7 +13,7 @@ using NINA.Image.Interfaces;
 using NINA.WPF.Base.Mediator;
 using Sony;
 
-namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin.SonyCameraPluginDrivers {
+namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
     /// <summary>
     /// This Class shows the basic principle on how to add a new Device driver to N.I.N.A. via the plugin interface
     /// When the application scans for equipment the "GetEquipment" method of a device provider is called.
@@ -48,7 +48,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin.SonyCameraPluginDrivers {
                 try {
                     int count = 0;
 
-                    foreach (var sonyDevice in driver.Devices()) {
+                    foreach (var sonyDevice in driver.Cameras()) {
                         count++;
                         devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice));
                     }

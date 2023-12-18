@@ -6,7 +6,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 
-namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin {
+namespace NINA.RetroKiwi.Plugin.SonyCamera {
 
     [Export(typeof(ResourceDictionary))]
     partial class Options : ResourceDictionary {

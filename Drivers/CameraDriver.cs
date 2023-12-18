@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-//using System.Reflection.Metadata.Ecma335;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,7 +22,7 @@ using NINA.Profile;
 using NINA.Profile.Interfaces;
 using Sony;
 
-namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin.SonyCameraPluginDrivers {
+namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
     public class CameraDriver : BaseINPC, ICamera {
         // Some camera settings we are interested in
         private const uint PROPID_BATTERY     = 53784;
@@ -436,7 +435,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin.SonyCameraPluginDrivers {
         public Task<bool> Connect(CancellationToken token) {
             return Task.Run<bool>(() => {
                 try {
-                    _camera = SonyDriver.GetInstance().OpenDevice(_device.Id);
+                    _camera = SonyDriver.GetInstance().OpenCamera(_device.Id);
                 }
                 catch (Exception ex) {
                     Logger.Error(ex);
@@ -450,7 +449,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin.SonyCameraPluginDrivers {
         public void Disconnect() {
             if (_camera != null) {
                 try {
-                    SonyDriver.GetInstance().CloseDevice(_camera.Handle);
+                    SonyDriver.GetInstance().CloseCamera(_camera.Handle);
                 } catch (Exception ex) {
                     Logger.Error(ex);
                 }

@@ -1,4 +1,4 @@
-﻿using NINA.RetroKiwi.Plugin.SonyCameraPlugin.Properties;
+﻿using NINA.RetroKiwi.Plugin.SonyCamera.Properties;
 using NINA.Core.Model;
 using NINA.Core.Utility;
 using NINA.Image.ImageData;
@@ -16,9 +16,9 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
-using Settings = NINA.RetroKiwi.Plugin.SonyCameraPlugin.Properties.Settings;
+using Settings = NINA.RetroKiwi.Plugin.SonyCamera.Properties.Settings;
 
-namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin {
+namespace NINA.RetroKiwi.Plugin.SonyCamera {
     /// <summary>
     /// This class exports the IPluginManifest interface and will be used for the general plugin information and options
     /// The base class "PluginBase" will populate all the necessary Manifest Meta Data out of the AssemblyInfo attributes. Please fill these accordingly
@@ -27,16 +27,16 @@ namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin {
     /// The user interface for the settings will be defined by a DataTemplate with the key having the naming convention "SonyCameraPlugin_Options" where SonyCameraPlugin corresponds to the AssemblyTitle - In this template example it is found in the Options.xaml
     /// </summary>
     [Export(typeof(IPluginManifest))]
-    public class SonyCameraPlugin : PluginBase, INotifyPropertyChanged {
+    public class SonyCamera : PluginBase, INotifyPropertyChanged {
         private readonly IPluginOptionsAccessor pluginSettings;
         private readonly IProfileService profileService;
         private readonly IImageSaveMediator imageSaveMediator;
 
         // Implementing a file pattern
-        private readonly ImagePattern exampleImagePattern = new ImagePattern("$$EXAMPLEPATTERN$$", "An example of an image pattern implementation", "Sony Camera Plugin");
+//        private readonly ImagePattern exampleImagePattern = new ImagePattern("$$EXAMPLEPATTERN$$", "An example of an image pattern implementation", "Sony Camera Plugin");
 
         [ImportingConstructor]
-        public SonyCameraPlugin(IProfileService profileService, IOptionsVM options, IImageSaveMediator imageSaveMediator) {
+        public SonyCamera(IProfileService profileService, IOptionsVM options, IImageSaveMediator imageSaveMediator) {
             if (Settings.Default.UpdateSettings) {
                 Settings.Default.Upgrade();
                 Settings.Default.UpdateSettings = false;
@@ -57,7 +57,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin {
             this.imageSaveMediator.BeforeFinalizeImageSaved += ImageSaveMediator_BeforeFinalizeImageSaved;
 
             // Register a new image file pattern for the Options > Imaging > File Patterns area
-            options.AddImagePattern(exampleImagePattern);
+//            options.AddImagePattern(exampleImagePattern);
         }
 
         public override Task Teardown() {
@@ -77,7 +77,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin {
         private Task ImageSaveMediator_BeforeImageSaved(object sender, BeforeImageSavedEventArgs e) {
             // Insert the example FITS keyword of a specific data type into the image metadata object prior to the file being saved
             // FITS keywords have a maximum of 8 characters. Comments are options. Comments that are too long will be truncated.
-
+/*
             string exampleKeywordComment = "This is a {0} keyword";
 
             // string
@@ -98,16 +98,16 @@ namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin {
             // Classes also exist for other data types:
             // BoolMetaDataHeader()
             // DateTimeMetaDataHeader()
-
+*/
             return Task.CompletedTask;
         }
 
         private Task ImageSaveMediator_BeforeFinalizeImageSaved(object sender, BeforeFinalizeImageSavedEventArgs e) {
-            // Populate the example image pattern with data. This can provide data that may not be immediately available
+/*            // Populate the example image pattern with data. This can provide data that may not be immediately available
             e.AddImagePattern(new ImagePattern(exampleImagePattern.Key, exampleImagePattern.Description, exampleImagePattern.Category) {
                 Value = $"{DateTime.Now:yyyy-MM-ddTHH:mm:ss.ffffffK}"
             });
-
+*/
             return Task.CompletedTask;
         }
 

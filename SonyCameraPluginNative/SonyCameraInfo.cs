@@ -75,7 +75,6 @@ namespace Sony {
             _info = info;
             _cameraInfo = cameraInfo;
             _descriptors = descriptors;
-            Logger.Trace($"BitsPerPixel for {info.Model} is {info.BitsPerPixel}");
         }
 
         public uint Handle {

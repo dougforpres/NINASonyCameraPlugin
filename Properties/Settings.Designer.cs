@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-namespace NINA.RetroKiwi.Plugin.SonyCameraPlugin.Properties {
+namespace NINA.RetroKiwi.Plugin.SonyCamera.Properties {
     
     
     [global::System.Runtime.CompilerServices.CompilerGeneratedAttribute()]
