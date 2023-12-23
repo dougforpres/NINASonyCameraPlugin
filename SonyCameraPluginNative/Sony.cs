@@ -8,17 +8,13 @@ namespace Sony
 {
     #region SonyBase
     public class SonyDriver {
-        private static SonyDriver _instance = null;
+        private static readonly Lazy<SonyDriver> _instance = new Lazy<SonyDriver>(() => new SonyDriver());
 
         private SonyMTPCameraDll _sonydll;
         private SonyCameraInfo _camera = null;
 
         public static SonyDriver GetInstance() {
-            if (_instance == null) {
-                _instance = new SonyDriver();
-            }
-
-            return _instance;
+            return _instance.Value;
         }
 
         public SonyDriver() {
