@@ -42,7 +42,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyMetadata("Tags", "Sony,Camera")]
 
 //[Optional] A link that will show a log of all changes in between your plugin's versions
-[assembly: AssemblyMetadata("ChangelogURL", "https://github.com/dougforpres/NINASonyCameraPlugin/CHANGELOG.md")]
+[assembly: AssemblyMetadata("ChangelogURL", "https://github.com/dougforpres/NINASonyCameraPlugin/blob/master/CHANGELOG.md")]
 
 //[Optional] The url to a featured logo that will be displayed in the plugin list next to the name
 [assembly: AssemblyMetadata("FeaturedImageURL", "https://retro.kiwi/images/NINAPluginLogoV2.jpg")]
