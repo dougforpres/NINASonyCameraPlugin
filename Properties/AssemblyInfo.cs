@@ -27,7 +27,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyMetadata("MinimumApplicationVersion", "2.0.0.9001")]
 
 // The license your plugin code is using
-[assembly: AssemblyMetadata("License", "GPL-3.0")]
+[assembly: AssemblyMetadata("License", "MPL-2.0")]
 // The url to the license
 [assembly: AssemblyMetadata("LicenseURL", "https://www.mozilla.org/en-US/MPL/2.0/")]
 // The repository where your pluggin is hosted
@@ -42,7 +42,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyMetadata("Tags", "Sony,Camera")]
 
 //[Optional] A link that will show a log of all changes in between your plugin's versions
-[assembly: AssemblyMetadata("ChangelogURL", "https://github.com/dougforpres/NINASonyCameraPlugin/CHANGELOG.md")]
+[assembly: AssemblyMetadata("ChangelogURL", "https://github.com/dougforpres/NINASonyCameraPlugin/blob/master/CHANGELOG.md")]
 
 //[Optional] The url to a featured logo that will be displayed in the plugin list next to the name
 [assembly: AssemblyMetadata("FeaturedImageURL", "https://retro.kiwi/images/NINAPluginLogoV2.jpg")]
@@ -59,7 +59,7 @@ It uses the same backend code as the Sony ASCOM driver, but because it is more '
 * The Gain property displays ISO values instead of cryptic numbers
 * Images are downloaded in the native ARW format
 
-*Note*: This addon uses the core (non-ASCOM) files present in the Sony ASCOM driver v1.0.1.17 and later, which must be installed for this addon to start up correctly.")]
+*Note*: This addon uses the core (non-ASCOM) files present in the Sony ASCOM driver v1.0.1.17 and later, which must be installed for this addon to start up correctly. You can find the Sony ASCOM driver at [https://github.com/dougforpres/ASCOMSonyCameraDriver/releases](https://github.com/dougforpres/ASCOMSonyCameraDriver/releases)")]
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from

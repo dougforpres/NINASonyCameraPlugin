@@ -258,7 +258,8 @@ namespace Sony {
             fSetExposureTime(hDevice, exposureTime, ref value);
 
             ImageInfo info = new ImageInfo {
-                ImageMode = IMAGEMODE_PASSTHRU
+                ImageMode = IMAGEMODE_PASSTHRU,
+                ExposureTime = (double)exposureTime,
             };
 
             if (fStartCapture(hDevice, ref info) != ERROR_SUCCESS) {

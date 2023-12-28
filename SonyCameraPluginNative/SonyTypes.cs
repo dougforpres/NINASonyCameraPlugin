@@ -48,6 +48,8 @@ namespace Sony {
         public UInt32 Width;
         public UInt32 Height;
         public UInt32 Flags;
+        public UInt32 MetaDataSize;
+        public IntPtr MetaData;
         public Double ExposureTime;
     }
 

@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
+using Castle.Components.DictionaryAdapter.Xml;
 using FTD2XX_NET;
 using Google.Protobuf.WellKnownTypes;
 using Newtonsoft.Json.Linq;
@@ -111,6 +112,17 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public bool Connected {
             get {
+                // Check that the camera is still open, if it is closed, then we are also closed
+                if (_connected) {
+                    UInt32 hCamera = GetCameraHandle();
+
+                    if (hCamera == 0) {
+                        Logger.Debug("Sony camera was disconnected without closing focuser first, cleaning up");
+                        _connected = false;
+                        _moving = false;
+                    }
+                }
+
                 return _connected;
             }
         }
