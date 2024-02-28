@@ -1,5 +1,8 @@
 ﻿# Sony Camera Plugin
 
+## 1.0.0.2
+Rebuilt using .NET Core 8 for NINA 3
+
 ## 1.0.0.1
 Initial release - Supports all functionality provided by the ASCOM version, plus:
 * LiveView support

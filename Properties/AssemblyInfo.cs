@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using Microsoft.VisualBasic;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -7,13 +8,13 @@ using System.Runtime.InteropServices;
 
 // [MANDATORY] The assembly versioning
 //Should be incremented for each new release build of a plugin
-[assembly: AssemblyVersion("1.0.0.1")]
-[assembly: AssemblyFileVersion("1.0.0.1")]
+[assembly: AssemblyVersion("1.0.0.2")]
+[assembly: AssemblyFileVersion("1.0.0.2")]
 
 // [MANDATORY] The name of your plugin
 [assembly: AssemblyTitle("Sony Camera Plugin")]
 // [MANDATORY] A short description of your plugin
-[assembly: AssemblyDescription("Add support for Sony Cameras")]
+[assembly: AssemblyDescription("Support for Sony Cameras (and optionally, Camera controlled lenses)")]
 
 // The following attributes are not required for the plugin per se, but are required by the official manifest meta data
 
@@ -21,10 +22,10 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCompany("Doug Henderson")]
 // The product name that this plugin is part of
 [assembly: AssemblyProduct("Sony Camera Plugin")]
-[assembly: AssemblyCopyright("Copyright © 2023 Doug Henderson")]
+[assembly: AssemblyCopyright("Copyright © 2023-2024 Doug Henderson")]
 
 // The minimum Version of N.I.N.A. that this plugin is compatible with
-[assembly: AssemblyMetadata("MinimumApplicationVersion", "2.0.0.9001")]
+[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.0.0.2001")]
 
 // The license your plugin code is using
 [assembly: AssemblyMetadata("License", "MPL-2.0")]
@@ -51,15 +52,27 @@ using System.Runtime.InteropServices;
 //[Optional] An additional url to an example example screenshot of your plugin in action
 [assembly: AssemblyMetadata("AltScreenshotURL", "")]
 //[Optional] An in-depth description of your plugin
-[assembly: AssemblyMetadata("LongDescription", @"This plugin adds the ability to image using compatible Sony cameras.
+[assembly: AssemblyMetadata("LongDescription", @"## Camera
+* Support for many different Sony Cameras. [See the list](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Cameras)
+* Provides LiveView function if the camera supports it
+* Images are downloaded in Sony's native ARW format (this is a N.I.N.A feature) so full meta-data is available
+* ISO is controllable via Gain property
+* If the exposure time is 30 seconds or below the driver will select the nearest built-in exposure time, otherwise BULB mode will be used
 
-It uses the same backend code as the Sony ASCOM driver, but because it is more 'native' to N.I.N.A, performance is improved and additional features are available:
+## Focuser
+* Support for over 15 different camera-mounted lenses. [See the list](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Lenses)
 
-* LiveView is available for any Sony Camera that supports it
-* The Gain property displays ISO values instead of cryptic numbers
-* Images are downloaded in the native ARW format
+*Note*: This addon uses the core (non-ASCOM) files present in the Sony ASCOM driver v1.0.1.17 and later, which must be installed for this addon to start up correctly. You can find the Sony ASCOM driver at [https://github.com/dougforpres/ASCOMSonyCameraDriver/releases](https://github.com/dougforpres/ASCOMSonyCameraDriver/releases).
 
-*Note*: This addon uses the core (non-ASCOM) files present in the Sony ASCOM driver v1.0.1.17 and later, which must be installed for this addon to start up correctly. You can find the Sony ASCOM driver at [https://github.com/dougforpres/ASCOMSonyCameraDriver/releases](https://github.com/dougforpres/ASCOMSonyCameraDriver/releases)")]
+## Support
+The best way to get support is via email. You can find my email address by following the *Homepage* link above, or by looking at the bottom of the [ASCOM driver Troubleshooting page](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting).
+
+For many bugs/problems I'm going to ask you for a driver log file, [here's a link to how you would do that](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting#the-driver-dll-log).
+
+* [My camera is not supported](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Installation#if-you-dont-have-a-supported-camera-model)
+* [List of supported cameras](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Cameras)
+* [Other known issues](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting)
+")]
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
