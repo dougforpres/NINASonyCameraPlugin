@@ -1,5 +1,8 @@
 ﻿# Sony Camera Plugin
 
+## 1.0.0.3
+Updated to support new device property "DisplayName" required in NINA 3
+
 ## 1.0.0.2
 Rebuilt using .NET Core 8 for NINA 3
 
