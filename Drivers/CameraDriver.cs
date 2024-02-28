@@ -310,6 +310,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             set => throw new NotImplementedException();
         }
 
+        public string DisplayName {
+            get => _device.Model;
+            set => throw new NotImplementedException();
+        }
+
         public string Category { get => "Sony"; }
 
         public bool Connected {

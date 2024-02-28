@@ -12,7 +12,7 @@
     <Reference Include="ReachFramework" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="NINA.Plugin" Version="3.0.0.2001-beta" />
+    <PackageReference Include="NINA.Plugin" Version="3.0.0.3001-rc" />
     <PackageReference Include="System.ComponentModel.Composition" Version="8.0.0" />
     <PackageReference Include="System.Data.DataSetExtensions" Version="4.6.0-preview3.19128.7" />
     <PackageReference Include="EntityFramework" Version="6.4.4" />

@@ -108,6 +108,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public string Name { get => $"{_info.Manufacturer} {_info.Model}"; }
 
+        public string DisplayName { get => $"{_info.Manufacturer} {_info.Model}"; }
+
         public string Category { get => "Sony"; }
 
         public bool Connected {
