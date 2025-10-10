@@ -232,9 +232,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public int GainMax {
             get {
                 if (_camera != null) {
-                    PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
+                    try {
+                        PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
 
-                    return (int)gainInfo.Options().Last().Value;
+                        return (int)gainInfo.Options().Last().Value;
+                    } catch (Exception ex) {
+                        Logger.Error("Problem getting gain min", ex);
+                        return -1;
+                    }
                 } else {
                     return 0;
                 }
@@ -244,9 +249,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public int GainMin {
             get {
                 if (_camera != null) {
-                    PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
+                    try {
+                        PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
 
-                    return (int)gainInfo.Options().Min(o => o.Value);
+                        return (int)gainInfo.Options().Min(o => o.Value);
+                    } catch (Exception ex) {
+                        Logger.Error("Problem getting gain max", ex);
+                        return -1;
+                    }
                 } else {
                     return -1;
                 }
@@ -582,6 +592,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public void SetBinning(short x, short y) {
             // Ignore
+        }
+        
+        public void UpdateSubSampleArea() {
+            throw new NotImplementedException();
         }
 
         #endregion
