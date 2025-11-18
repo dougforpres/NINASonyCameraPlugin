@@ -1,5 +1,9 @@
 ﻿# Sony Camera Plugin
 
+## 1.0.0.4
+* Implemented the new `UpdateSubSampleArea` contract required by NINA 3.2 and reset the imaging area to the full sensor so the plugin can load again.
+* Updated the minimum NINA version metadata to 3.2.0.3001.
+
 ## 1.0.0.3
 Updated to support new device property "DisplayName" required in NINA 3
 

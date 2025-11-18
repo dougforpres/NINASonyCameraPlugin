@@ -598,7 +598,25 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
         
         public void UpdateSubSampleArea() {
-            throw new NotImplementedException();
+            if (_camera == null) {
+                EnableSubSample = false;
+                SubSampleX = 0;
+                SubSampleY = 0;
+                SubSampleWidth = 0;
+                SubSampleHeight = 0;
+                return;
+            }
+
+            if (EnableSubSample && !CanSubSample) {
+                Logger.Warning("Sub-sampling requested but not supported for Sony cameras. Falling back to full frame.");
+                EnableSubSample = false;
+            }
+
+            // Sony cameras currently expose the entire frame, so always reset to the sensor dimensions.
+            SubSampleX = 0;
+            SubSampleY = 0;
+            SubSampleWidth = _camera.ImageSize.Width;
+            SubSampleHeight = _camera.ImageSize.Height;
         }
 
         #endregion
