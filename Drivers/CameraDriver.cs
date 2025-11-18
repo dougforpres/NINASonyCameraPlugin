@@ -60,6 +60,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             return SonyDriver.GetInstance().GetProperty(_camera.Handle, id);
         }
 
+        private void NotifyGainPropertiesChanged() {
+            RaisePropertyChanged(nameof(CanGetGain));
+            RaisePropertyChanged(nameof(CanSetGain));
+            RaisePropertyChanged(nameof(GainMin));
+            RaisePropertyChanged(nameof(GainMax));
+            RaisePropertyChanged(nameof(Gain));
+            RaisePropertyChanged(nameof(Gains));
+        }
+
         #endregion
 
         #region Supported Properties
@@ -283,6 +292,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 if (_camera != null) {
                     try {
                         SonyDriver.GetInstance().SetProperty(_camera.Handle, PROPID_ISO, (uint)value);
+                        RaisePropertyChanged(nameof(Gain));
                     } catch (Exception ex) {
                         Logger.Error($"Problem setting gain to {value}", ex);
                     }
@@ -456,6 +466,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     _camera = null;
                 }
 
+                NotifyGainPropertiesChanged();
                 return _camera != null;
             });
         }
@@ -469,6 +480,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 _camera = null;
+                NotifyGainPropertiesChanged();
             }
         }
 
