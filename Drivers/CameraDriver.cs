@@ -60,6 +60,28 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             return SonyDriver.GetInstance().GetProperty(_camera.Handle, id);
         }
 
+        private IReadOnlyList<PropertyValueOption> GetAvailableIsoOptions() {
+            if (_camera == null) {
+                return Array.Empty<PropertyValueOption>();
+            }
+
+            uint[] propertyCandidates = { PROPID_ISOS, PROPID_ISO };
+
+            foreach (var propertyId in propertyCandidates) {
+                try {
+                    var options = _camera.GetPropertyInfo(propertyId)?.Options()?.Where(o => o.Value <= 0x00FFFFFF).ToList();
+                    if (options != null && options.Count > 0) {
+                        return options;
+                    }
+                } catch (Exception ex) {
+                    Logger.Warning($"Unable to enumerate ISO options for property 0x{propertyId:X}: {ex.Message}");
+                }
+            }
+
+            Logger.Warning("Camera did not report any ISO options via known properties.");
+            return Array.Empty<PropertyValueOption>();
+        }
+
         private void NotifyGainPropertiesChanged() {
             RaisePropertyChanged(nameof(CanGetGain));
             RaisePropertyChanged(nameof(CanSetGain));
@@ -220,55 +242,35 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public bool CanGetGain {
-            get {
-                if (_camera != null) {
-                    PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
-
-                    if (gainInfo != null && gainInfo.Options().Any()) {
-                        return true;
-                    } else {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-        }
+        public bool CanGetGain => GetAvailableIsoOptions().Any();
 
         public bool CanSetGain => CanGetGain;
 
         public int GainMax {
             get {
-                if (_camera != null) {
-                    try {
-                        PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
-
-                        return (int)gainInfo.Options().Where(o => o.Value <= 0x00FFFFFF).Last().Value;
-                    } catch (Exception ex) {
-                        Logger.Error("Problem getting gain min", ex);
-                        return -1;
+                var isoOptions = GetAvailableIsoOptions();
+                if (!isoOptions.Any()) {
+                    if (_camera != null) {
+                        Logger.Error("Problem getting gain max: camera did not report ISO options.");
                     }
-                } else {
-                    return 0;
+                    return -1;
                 }
+
+                return (int)isoOptions.Last().Value;
             }
         }
 
         public int GainMin {
             get {
-                if (_camera != null) {
-                    try {
-                        PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
-
-                        return (int)gainInfo.Options().Where(o => o.Value <= 0x00FFFFFF).Min(o => o.Value);
-                    } catch (Exception ex) {
-                        Logger.Error("Problem getting gain max", ex);
-                        return -1;
+                var isoOptions = GetAvailableIsoOptions();
+                if (!isoOptions.Any()) {
+                    if (_camera != null) {
+                        Logger.Error("Problem getting gain min: camera did not report ISO options.");
                     }
-                } else {
                     return -1;
                 }
+
+                return (int)isoOptions.Min(o => o.Value);
             }
         }
 
@@ -304,17 +306,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             get {
                 List<int> gains = new List<int>();
 
-                if (_camera != null) {
-                    PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
-
-                    foreach (var iso in gainInfo.Options().Where(o => o.Value <= 0x00FFFFFF)) {
-                        if (iso.Value == 0xffffff) {
-                            // AUTO
-                            gains.Add(0);
-                        }
-                        else {
-                            gains.Add((int)iso.Value);
-                        }
+                foreach (var iso in GetAvailableIsoOptions()) {
+                    if (iso.Value == 0xffffff) {
+                        gains.Add(0); // AUTO
+                    } else {
+                        gains.Add((int)iso.Value);
                     }
                 }
 
