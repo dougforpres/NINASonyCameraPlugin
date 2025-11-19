@@ -27,7 +27,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // Some camera settings we are interested in
         private const uint PROPID_BATTERY = 53784;
         private const uint PROPID_ISO = 0xD21E; // Actual ISO currently set
-        private const uint PROPID_ISOS = PROPID_ISO; // List of learnt ISOs this camera supports
+        private const uint PROPID_ISOS = 0xFFFE; // Legacy property used on some models for ISO options
 
         // Capture Status
         private const uint CAPTURE_CREATED    = 0x0000;
