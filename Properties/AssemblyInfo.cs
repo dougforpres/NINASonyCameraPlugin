@@ -74,7 +74,7 @@ For many bugs/problems I'm going to ask you for a driver log file, [here's a lin
 * [Other known issues](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting)
 
 ## Contributors
-* Lucas Lepski
+* Lucas Lepski [@ShurkanTwo](https://github.com/shurkanTwo)
 ")]
 
 // Setting ComVisible to false makes the types in this assembly not visible

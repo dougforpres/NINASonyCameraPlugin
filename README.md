@@ -45,7 +45,7 @@ https://github.com/dougforpres/NINASonyCameraPlugin/releases
 
 - Version: 1.0.0.4
 - Author: Doug Henderson
-- Contributors: Lucas Lepski ([@ShurkanTwo](https://github.com/shurkanTwo))
+- Contributors: Lucas Lepski [@ShurkanTwo](https://github.com/shurkanTwo)
 - Minimum NINA version: 3.2.0.3001
 - License: MPL-2.0 (https://www.mozilla.org/en-US/MPL/2.0/)
 - Homepage: https://retro.kiwi
