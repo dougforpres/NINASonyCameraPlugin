@@ -27,7 +27,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // Some camera settings we are interested in
         private const uint PROPID_BATTERY = 53784;
         private const uint PROPID_ISO = 0xD21E; // Actual ISO currently set
-        private const uint PROPID_ISOS = 0xFFFE; // Legacy property used on some models for ISO options
+        private const uint PROPID_ISOS = 0xFFFE; // Registry-backed list of learnt ISOs (may be empty until learnt)
 
         // Capture Status
         private const uint CAPTURE_CREATED    = 0x0000;
@@ -78,7 +78,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
             }
 
-            Logger.Warning("Camera did not report any ISO options via known properties.");
+            Logger.Warning("Camera did not report any ISO options via known properties (registry ISO list may be empty until the camera learns it).");
             return Array.Empty<PropertyValueOption>();
         }
 

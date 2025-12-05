@@ -3,7 +3,7 @@
 ## 1.0.0.4
 * Added the `UpdateSubSampleArea` implementation and bumped the minimum NINA version so the plugin loads in 3.2.
 * Restored the ISO/Gain UI by notifying NINA whenever the camera connection updates ISO data and by handling cameras without ISO option lists.
-* Probed the legacy ISO property (`0xFFFE`) so older Sony bodies still populate the gain dropdown.
+* Probed the registry ISO property (`0xFFFE`) so older Sony bodies still populate the gain dropdown.
 * Logged clearer errors when gain min/max cannot be determined and improved the GitHub workflow to publish the release DLL artifact.
 
 ## 1.0.0.3
