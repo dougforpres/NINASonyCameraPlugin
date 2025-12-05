@@ -8,8 +8,8 @@ using System.Runtime.InteropServices;
 
 // [MANDATORY] The assembly versioning
 //Should be incremented for each new release build of a plugin
-[assembly: AssemblyVersion("1.0.0.3")]
-[assembly: AssemblyFileVersion("1.0.0.3")]
+[assembly: AssemblyVersion("1.0.0.4")]
+[assembly: AssemblyFileVersion("1.0.0.4")]
 
 // [MANDATORY] The name of your plugin
 [assembly: AssemblyTitle("Sony Camera Plugin")]
@@ -25,7 +25,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCopyright("Copyright © 2023-2024 Doug Henderson")]
 
 // The minimum Version of N.I.N.A. that this plugin is compatible with
-[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.0.0.2001")]
+[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.2.0.3001")]
 
 // The license your plugin code is using
 [assembly: AssemblyMetadata("License", "MPL-2.0")]
@@ -72,6 +72,9 @@ For many bugs/problems I'm going to ask you for a driver log file, [here's a lin
 * [My camera is not supported](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Installation#if-you-dont-have-a-supported-camera-model)
 * [List of supported cameras](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Cameras)
 * [Other known issues](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting)
+
+## Contributors
+* Lucas Lepski [@ShurkanTwo](https://github.com/shurkanTwo)
 ")]
 
 // Setting ComVisible to false makes the types in this assembly not visible

@@ -25,9 +25,9 @@ using Sony;
 namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
     public class CameraDriver : BaseINPC, ICamera {
         // Some camera settings we are interested in
-        private const uint PROPID_BATTERY     = 53784;
-        private const uint PROPID_ISO         = 53790;  // Actual ISO currently set
-        private const uint PROPID_ISOS        = 65534; // List of learnt ISOs this camera supports
+        private const uint PROPID_BATTERY = 53784;
+        private const uint PROPID_ISO = 0xD21E; // Actual ISO currently set
+        private const uint PROPID_ISOS = 0xFFFE; // Registry-backed list of learnt ISOs (may be empty until learnt)
 
         // Capture Status
         private const uint CAPTURE_CREATED    = 0x0000;
@@ -58,6 +58,37 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         private PropertyValue GetPropertyValue(uint id) {
             return SonyDriver.GetInstance().GetProperty(_camera.Handle, id);
+        }
+
+        private IReadOnlyList<PropertyValueOption> GetAvailableIsoOptions() {
+            if (_camera == null) {
+                return Array.Empty<PropertyValueOption>();
+            }
+
+            uint[] propertyCandidates = { PROPID_ISOS, PROPID_ISO };
+
+            foreach (var propertyId in propertyCandidates) {
+                try {
+                    var options = _camera.GetPropertyInfo(propertyId)?.Options()?.Where(o => o.Value <= 0x00FFFFFF).ToList();
+                    if (options != null && options.Count > 0) {
+                        return options;
+                    }
+                } catch (Exception ex) {
+                    Logger.Warning($"Unable to enumerate ISO options for property 0x{propertyId:X}: {ex.Message}");
+                }
+            }
+
+            Logger.Warning("Camera did not report any ISO options via known properties (registry ISO list may be empty until the camera learns it).");
+            return Array.Empty<PropertyValueOption>();
+        }
+
+        private void NotifyGainPropertiesChanged() {
+            RaisePropertyChanged(nameof(CanGetGain));
+            RaisePropertyChanged(nameof(CanSetGain));
+            RaisePropertyChanged(nameof(GainMin));
+            RaisePropertyChanged(nameof(GainMax));
+            RaisePropertyChanged(nameof(Gain));
+            RaisePropertyChanged(nameof(Gains));
         }
 
         #endregion
@@ -211,45 +242,35 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public bool CanGetGain {
-            get {
-                if (_camera != null) {
-                    PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
-
-                    if (gainInfo != null && gainInfo.Options().Any()) {
-                        return true;
-                    } else {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-        }
+        public bool CanGetGain => GetAvailableIsoOptions().Any();
 
         public bool CanSetGain => CanGetGain;
 
         public int GainMax {
             get {
-                if (_camera != null) {
-                    PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
-
-                    return (int)gainInfo.Options().Last().Value;
-                } else {
-                    return 0;
+                var isoOptions = GetAvailableIsoOptions();
+                if (!isoOptions.Any()) {
+                    if (_camera != null) {
+                        Logger.Error("Problem getting gain max: camera did not report ISO options.");
+                    }
+                    return -1;
                 }
+
+                return (int)isoOptions.Last().Value;
             }
         }
 
         public int GainMin {
             get {
-                if (_camera != null) {
-                    PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
-
-                    return (int)gainInfo.Options().Min(o => o.Value);
-                } else {
+                var isoOptions = GetAvailableIsoOptions();
+                if (!isoOptions.Any()) {
+                    if (_camera != null) {
+                        Logger.Error("Problem getting gain min: camera did not report ISO options.");
+                    }
                     return -1;
                 }
+
+                return (int)isoOptions.Min(o => o.Value);
             }
         }
 
@@ -258,7 +279,6 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 if (_camera != null) {
                     try {
                         PropertyValue value = GetPropertyValue(PROPID_ISO);
-                        PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
 
                         return (int)(value.Value == 0xffffff ? 0 : value.Value);
                     } catch (Exception ex) {
@@ -274,6 +294,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 if (_camera != null) {
                     try {
                         SonyDriver.GetInstance().SetProperty(_camera.Handle, PROPID_ISO, (uint)value);
+                        RaisePropertyChanged(nameof(Gain));
                     } catch (Exception ex) {
                         Logger.Error($"Problem setting gain to {value}", ex);
                     }
@@ -285,17 +306,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             get {
                 List<int> gains = new List<int>();
 
-                if (_camera != null) {
-                    PropertyInfo gainInfo = _camera.GetPropertyInfo(PROPID_ISOS);
-
-                    foreach (var iso in gainInfo.Options()) {
-                        if (iso.Value == 0xffffff) {
-                            // AUTO
-                            gains.Add(0);
-                        }
-                        else {
-                            gains.Add((int)iso.Value);
-                        }
+                foreach (var iso in GetAvailableIsoOptions()) {
+                    if (iso.Value == 0xffffff) {
+                        gains.Add(0); // AUTO
+                    } else {
+                        gains.Add((int)iso.Value);
                     }
                 }
 
@@ -343,6 +358,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             set {
             }
         }
+
         public bool CanSubSample => false;
 
         public bool EnableSubSample { get; set; }
@@ -441,12 +457,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             return Task.Run<bool>(() => {
                 try {
                     _camera = SonyDriver.GetInstance().OpenCamera(_device.Id);
-                }
-                catch (Exception ex) {
+                } catch (Exception ex) {
                     Logger.Error(ex);
                     _camera = null;
                 }
 
+                NotifyGainPropertiesChanged();
                 return _camera != null;
             });
         }
@@ -460,6 +476,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 _camera = null;
+                NotifyGainPropertiesChanged();
             }
         }
 
@@ -468,7 +485,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 using (var memStream = new MemoryStream(SonyDriver.GetInstance().GetLiveView(_camera.Handle))) {
                     memStream.Position = 0;
 
-                    JpegBitmapDecoder decoder = new JpegBitmapDecoder(memStream, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
+                    JpegBitmapDecoder decoder =
+                        new JpegBitmapDecoder(memStream, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
 
                     FormatConvertedBitmap bitmap = new FormatConvertedBitmap();
                     bitmap.BeginInit();
@@ -482,15 +500,16 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     var metaData = new ImageMetaData();
 
                     return _exposureDataFactory.CreateImageArrayExposureData(
-                            input: outArray,
-                            width: bitmap.PixelWidth,
-                            height: bitmap.PixelHeight,
-                            bitDepth: 16,
-                            isBayered: false,
-                            metaData: metaData);
+                        input: outArray,
+                        width: bitmap.PixelWidth,
+                        height: bitmap.PixelHeight,
+                        bitDepth: 16,
+                        isBayered: false,
+                        metaData: metaData);
                 }
             });
         }
+
         public void SetupDialog() {
             throw new NotImplementedException();
         }
@@ -500,7 +519,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 SonyDriver driver = SonyDriver.GetInstance();
                 uint captureStatus = driver.GetCaptureStatus(_camera.Handle);
 
-                if (captureStatus == CAPTURE_CAPTURING || captureStatus == CAPTURE_PROCESSING || captureStatus == CAPTURE_STARTING || captureStatus == CAPTURE_READING || captureStatus == CAPTURE_PROCESSING) {
+                if (captureStatus == CAPTURE_CAPTURING || captureStatus == CAPTURE_PROCESSING || captureStatus == CAPTURE_STARTING ||
+                    captureStatus == CAPTURE_READING || captureStatus == CAPTURE_PROCESSING) {
                     Notification.ShowWarning("Another exposure still in progress. Cancelling it to start another.");
                 }
 
@@ -508,7 +528,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 driver.CancelCapture(_camera.Handle);
 
                 double exposureTime = sequence.ExposureTime;
-                driver.StartCapture(_camera.Handle, (float)exposureTime);//);
+                driver.StartCapture(_camera.Handle, (float)exposureTime); //);
             }
         }
 
@@ -530,7 +550,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                 try {
                     uint captureStatus = driver.GetCaptureStatus(_camera.Handle);
-                    Logger.Info($"Waiting for image to be ready, current state is {captureStatus}, completion states are {String.Join(", ", completionStates)}");
+                    Logger.Info(
+                        $"Waiting for image to be ready, current state is {captureStatus}, completion states are {String.Join(", ", completionStates)}");
 
                     while (!completionStates.Contains(captureStatus)) {
                         await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), token);
@@ -582,6 +603,28 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public void SetBinning(short x, short y) {
             // Ignore
+        }
+        
+        public void UpdateSubSampleArea() {
+            if (_camera == null) {
+                EnableSubSample = false;
+                SubSampleX = 0;
+                SubSampleY = 0;
+                SubSampleWidth = 0;
+                SubSampleHeight = 0;
+                return;
+            }
+
+            if (EnableSubSample && !CanSubSample) {
+                Logger.Warning("Sub-sampling requested but not supported for Sony cameras. Falling back to full frame.");
+                EnableSubSample = false;
+            }
+
+            // Sony cameras currently expose the entire frame, so always reset to the sensor dimensions.
+            SubSampleX = 0;
+            SubSampleY = 0;
+            SubSampleWidth = _camera.ImageSize.Width;
+            SubSampleHeight = _camera.ImageSize.Height;
         }
 
         #endregion
