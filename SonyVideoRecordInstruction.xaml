@@ -1,0 +1,9 @@
+<DataTemplate DataType="{x:Type local:SonyVideoRecordInstruction}">
+	<StackPanel>
+		<TextBlock Text="Sony Video Record" FontWeight="Bold"/>
+		<StackPanel Orientation="Horizontal">
+			<TextBlock Text="Duration:" Margin="0,0,5,0"/>
+			<nina:TimeSpanEditor Value="{Binding Duration}" Width="150"/>
+		</StackPanel>
+	</StackPanel>
+</DataTemplate>
