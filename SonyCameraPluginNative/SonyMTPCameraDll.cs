@@ -88,6 +88,8 @@ namespace Sony {
         private dSetFocusPosition fSetFocusPosition;
         private dGetFocusPosition fGetFocusPosition;
         private dGetFocusLimit fGetFocusLimit;
+        
+        private dSendCommand fSendCommand;
 #pragma warning restore 0649
 
         private string[] DllFunctions = {
@@ -102,6 +104,7 @@ namespace Sony {
             "SetExposureTime",
             "GetLensCount", "GetLensInfo", "SetAttachedLens",
             "SetFocusPosition", "GetFocusPosition", "GetFocusLimit",
+            "SendCommand"
         };
 
         internal SonyMTPCameraDll() {
@@ -432,7 +435,28 @@ namespace Sony {
         public UInt32 GetFocusLimit(UInt32 hCamera) {
             return fGetFocusLimit(hCamera);
         }
+        
+        /**
+          TODO: confirm that it's always a command id and then a single numeric arg...
+          
+          else we nee dot make this specific to the video commands and possibly even specific to specific models.. 
+          
+          and list different video command method sfor differnt models, whcih will assert the moedel is correct before proceeding
+          with delegation.
+          
+          NOTE this shoudl be avialble over MTP  with 
+          
+          IPortableDevice::SendCommand
+          
+          but i'm nto sure if we need to do further de-referencing to.. bind to that .. command within the IPortableDevice
+          it may just be present as long as the device is of tha ttype idk.
+        */
+        public UInt32 SendCommand(UInt32 hCamera, UInt32 commandId, UInt32 commandArg) {
+            return fSendCommand(hCamera, commandId, commandArg);
+        }
         #endregion
+        
+        
 
         #region Delegate definitions
         internal delegate UInt32 dGetSupportedDeviceCount();
@@ -461,6 +485,10 @@ namespace Sony {
         internal delegate UInt32 dSetFocusPosition(UInt32 hCamera, ref UInt32 position);
         internal delegate UInt32 dGetFocusPosition(UInt32 hCamera);
         internal delegate UInt32 dGetFocusLimit(UInt32 hCamera);
+        
+   
+        
+        internal delegate UInt32 dSendCommand(UInt32 hCamera, UInt32 commandId, UInt32 commandArg);
 
         internal delegate UInt32 dGetLensCount();
         internal delegate UInt32 dGetLensInfo(UInt32 offset, ref LensInfo info);

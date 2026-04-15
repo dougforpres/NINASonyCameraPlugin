@@ -80,6 +80,27 @@ namespace Sony
         public void CancelCapture(uint handle) {
             _sonydll.CancelCapture(handle);
         }
+        
+        /**
+        Sends a PTP command. Which can be of an extended set supported by the device. 
+        
+         For now we are just going to send and hope it works.. 
+         
+         But we need to be able to query and list commands. 
+         
+         Maybe we can actually modify the plugin to not assume a command but list them.
+         
+         with a name ( if in the result ) 
+         
+         and 
+         
+         BTW , this is intended to be for start recording or stop recording video , so we know there is a command id
+         and an arg, idk fit hat's.. always.. the case.
+         
+         */
+         public void SendCommand(uint handle, uint command, uint commandArg) {
+            _sonydll.SendCommand(handle, command, commandArg);
+        }
 
         public byte[] GetLastImage() {
             return _sonydll.LastImage;

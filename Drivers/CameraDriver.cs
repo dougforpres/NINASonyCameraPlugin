@@ -23,7 +23,14 @@ using NINA.Profile.Interfaces;
 using Sony;
 
 namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
-    public class CameraDriver : BaseINPC, ICamera {
+    public interface IVideoCapableSonyCamera { // too may nee dto be model or model sub group specific, and we may nee dto assert befor casting to htis
+    
+        void StartVideoRecording();
+        void StopVideoRecording();
+        
+    }
+    
+    public class CameraDriver : BaseINPC, ICamera, IVideoCapableSonyCamera {
         // Some camera settings we are interested in
         private const uint PROPID_BATTERY = 53784;
         private const uint PROPID_ISO = 0xD21E; // Actual ISO currently set
@@ -541,6 +548,37 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 SonyDriver.GetInstance().CancelCapture(_camera.Handle);
             }
         }
+        
+        /**
+         * TODO list commands supported for the model. We may need some kind of 
+           model to supported record command mapping , and we may need to know recording duration limits.
+           Ideally we take a duration arg and do the blocking here, rather than do a start stop
+           The reason being, we can check to see if duration is supported before
+           issuing the command.
+         */
+        void StartVideoRecording() {
+            if (_camera == null) {
+                throw new SonyException("Cannot start recording, camera is not set");
+            }
+              // TODO if result is not as expected, indicating maybe  command is invalid for model or camera
+              // is not in a state suitable for recording or command failed, then handle accordingly
+              // TODO don't hard code these op codes and args. We need a supported video record codes by model list
+              // query the model and fial if model doens't uspport video
+              // and the ui should  show the extension with a warning message if connected camera is not supported.
+            SonyDriver.GetInstance().SendCommand(_camera.Handle, 0x9202, 0x0001); // REC START (confirm exact opcode for your models)
+        }
+
+        void StopVideoRecording() {
+            if (_camera == null) {
+                throw new SonyException("Cannot stop recording, camera is not set");
+            }
+            // TODO if result is not as expected, indicating maybe recording already stopped or an error occurred
+            // handle accordingly
+                          // TODO don't hard code these op codes and args. We need a supported video record codes by model list
+              // query the model and fial if model doens't uspport video
+              // and the ui should  show the extension with a warning message if connected camera is not supported.
+            SonyDriver.GetInstance().SendCommand(_camera.Handle, 0x9202, 0x0000); // REC STOP
+        }
 
         public async Task WaitUntilExposureIsReady(CancellationToken token) {
             using (token.Register(AbortExposure)) {
@@ -589,6 +627,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
 
+        /**
+         TODO I've basiclaly impeplented something akin  to these I believe for generic PTP commands
+         which can be used to extend base PTP set and execute camera specific functions, 
+         like video record in our case.
+         
+         So, I may wan tto .. move that implementation to one of these..
+         
+         methods instead. not sure.
+        */
         public void SendCommandBlind(string command, bool raw = true) {
             throw new NotImplementedException();
         }
