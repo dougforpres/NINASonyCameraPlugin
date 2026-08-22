@@ -57,6 +57,13 @@ namespace Sony
         private const int OPEN_CAMERA_TIMEOUT_MS = 60000;
 
         /// <summary>
+        /// Starting a capture also applies the shutter speed, and that can take
+        /// a while: the camera has to be stepped one click at a time and may
+        /// need the change re-issued before it takes.
+        /// </summary>
+        private const int START_CAPTURE_TIMEOUT_MS = 60000;
+
+        /// <summary>
         /// Closing must not join the queue behind a stuck call - disconnecting
         /// is the user's way out, so it gives up quickly and cleans up locally.
         /// </summary>
@@ -417,8 +424,13 @@ namespace Sony
             return Invoke(handle, "read capture status", () => _sonydll.GetCaptureStatus(handle));
         }
 
+        /// <summary>
+        /// Gets a longer watchdog than everything else: it may have to re-issue
+        /// a shutter-speed change several times before the camera takes it, and
+        /// the driver steps roughly one click per second.
+        /// </summary>
         public void StartCapture(uint handle, float exposureTime) {
-            Invoke(handle, $"start a {exposureTime}s capture", () => _sonydll.StartCapture(handle, exposureTime));
+            Invoke(handle, $"start a {exposureTime}s capture", () => _sonydll.StartCapture(handle, exposureTime), timeoutMs: START_CAPTURE_TIMEOUT_MS);
         }
 
         public void CancelCapture(uint handle) {

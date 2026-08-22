@@ -252,40 +252,159 @@ namespace Sony {
             return returndata;
         }
 
-        public UInt32 StartCapture(UInt32 hDevice, float exposureTime) {
+        /// <summary>Shutter speed. A Range property: it can only be stepped, not set outright.</summary>
+        private const UInt32 PROPID_SHUTTER_SPEED = 0xD20D;
+
+        /// <summary>
+        /// How long to keep re-issuing a shutter-speed change that has not taken
+        /// effect. Sized to cover a large move: the driver steps roughly one
+        /// click per second, and 15s to 1s is a dozen clicks.
+        /// </summary>
+        private const int EXPOSURE_SETTLE_TIMEOUT_MS = 12000;
+
+        /// <summary>
+        /// Accept the applied shutter speed if it is within this factor of what
+        /// was asked for. Sony steps in third-stops (x1.26), so the nearest
+        /// achievable speed is never more than about 12% away; 1.25 leaves room
+        /// for that without accepting a speed that is a whole step out.
+        /// </summary>
+        private const double EXPOSURE_MATCH_TOLERANCE = 1.25;
+
+        /// <summary>
+        /// Decodes a shutter-speed property value into seconds. The value packs
+        /// a fraction as (numerator &lt;&lt; 16) | denominator, so 0x0096000a is
+        /// 150/10 = 15s and 0x00010028 is 1/40 = 0.025s.
+        /// </summary>
+        private static bool TryDecodeShutterSpeed(UInt32 raw, out double seconds) {
+            uint numerator = raw >> 16;
+            uint denominator = raw & 0xFFFF;
+
+            if (denominator == 0 || numerator == 0 || raw == 0xFFFFFFFF) {
+                // Bulb, or something that is not a duration at all.
+                seconds = 0;
+                return false;
+            }
+
+            seconds = (double)numerator / denominator;
+            return true;
+        }
+
+        private bool TryReadShutterSpeedSeconds(UInt32 hDevice, out double seconds) {
+            seconds = 0;
+
+            try {
+                PropertyValue current = GetSinglePropertyValue(hDevice, PROPID_SHUTTER_SPEED);
+
+                return TryDecodeShutterSpeed(current.Value, out seconds);
+            } catch (Exception ex) {
+                Logger.Debug($"Unable to read back the shutter speed: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static bool ExposureMatches(double actual, double requested) {
+            if (actual <= 0 || requested <= 0) {
+                return false;
+            }
+
+            double ratio = actual > requested ? actual / requested : requested / actual;
+
+            return ratio <= EXPOSURE_MATCH_TOLERANCE;
+        }
+
+        /// <summary>
+        /// Sets the shutter speed, then confirms the camera actually took it and
+        /// re-issues the change until it does.
+        /// <para>
+        /// Shutter speed is a Range property, so the driver cannot assign it -
+        /// it steps the camera one click at a time toward the target. If the
+        /// first step has no effect the driver concludes it cannot move and
+        /// starts the capture at the old speed anyway ("letting camera figure it
+        /// out" in its log). That is exactly what happens when exposures are
+        /// taken back to back: the camera ignores the step for a moment after
+        /// handing over the previous frame. From the driver log, asked for
+        /// 0.5s down to 0.0078s, every frame was taken at 1s:
+        /// </para>
+        /// <code>
+        /// 17:29:43.569 Property xd20d is set to x000a000a, nudging x00000001 toward x0005000a
+        /// 17:29:45.691 Shutter time is x000a000a (1.000000 s), we wanted (0.501090 s)
+        /// </code>
+        /// <para>
+        /// Re-issuing works because each call steps again, and once the camera
+        /// is responsive the driver walks all the way to the target.
+        /// </para>
+        /// </summary>
+        private void ApplyExposureTime(UInt32 hDevice, float exposureTime) {
             PropertyValue value = new PropertyValue();
 
-            // The result of this used to be discarded. When the camera refuses
-            // the new shutter speed the capture then went ahead at whatever was
-            // set previously, which is what makes the flat wizard's search never
-            // converge: it thinks it changed the exposure, and the frames keep
-            // coming back at the old one.
-            //
-            // ERROR_NOT_SUPPORTED is the exception. The driver returns it when
-            // the camera has no learnt exposure-time table, in which case it
-            // cannot drive the shutter speed at all and the exposure set on the
-            // body is used as-is. That has always been how those cameras work,
-            // so warn rather than break them.
-            //
-            // valueOut is not populated by the driver, so there is nothing
-            // useful to read back from it.
             uint hr = fSetExposureTime(hDevice, exposureTime, ref value);
 
             if (hr == ERROR_NOT_SUPPORTED) {
+                // The driver returns this when the camera has no learnt
+                // exposure-time list, in which case it cannot drive the shutter
+                // at all and the speed set on the body is used as-is. That is
+                // how those cameras have always worked, so do not fail.
                 Logger.Warning($"The driver cannot set the exposure time on this camera (no learnt exposure-time list), so {exposureTime}s was not applied - the camera's own shutter speed will be used. Run SonyCameraInfo with the camera connected to learn its exposure times.");
-            } else if (hr != ERROR_SUCCESS) {
-                throw new SonyException($"Unable to set exposure time to {exposureTime}s, error {hr}");
-            } else if (!string.IsNullOrEmpty(value.Text)) {
-                // A camera only has discrete shutter speeds, so the driver picks
-                // the nearest one and reports success. Log what was actually
-                // applied next to what was asked for: when a search like the
-                // flat wizard's narrows below the gap between adjacent shutter
-                // speeds, every further step produces an identical exposure and
-                // the search cannot converge. Without this the requested value
-                // is all that appears in the log and the two look the same.
-                // Info rather than Debug so it is present in a default NINA log.
-                Logger.Info($"Exposure time requested {exposureTime}s; camera set to '{value.Text}' (0x{value.Value:x8})");
+                return;
             }
+
+            if (hr != ERROR_SUCCESS) {
+                throw new SonyException($"Unable to set exposure time to {exposureTime}s, error {hr}");
+            }
+
+            if (!TryReadShutterSpeedSeconds(hDevice, out double actual)) {
+                // Bulb, or a value that is not a plain duration - nothing to
+                // verify against.
+                return;
+            }
+
+            if (ExposureMatches(actual, exposureTime)) {
+                Logger.Debug($"Exposure time requested {exposureTime}s; camera is at {actual}s.");
+                return;
+            }
+
+            Stopwatch elapsed = Stopwatch.StartNew();
+            double previous = actual;
+            int attempts = 0;
+            int withoutProgress = 0;
+
+            while (elapsed.ElapsedMilliseconds < EXPOSURE_SETTLE_TIMEOUT_MS) {
+                attempts++;
+
+                hr = fSetExposureTime(hDevice, exposureTime, ref value);
+
+                if (hr != ERROR_SUCCESS) {
+                    break;
+                }
+
+                if (!TryReadShutterSpeedSeconds(hDevice, out actual)) {
+                    return;
+                }
+
+                if (ExposureMatches(actual, exposureTime)) {
+                    Logger.Info($"Exposure time {exposureTime}s took {attempts} extra attempt(s) over {elapsed.ElapsedMilliseconds}ms to reach the camera; it is now at {actual}s.");
+                    return;
+                }
+
+                if (actual == previous) {
+                    // The camera is not moving. Give it a moment - this is
+                    // normally because it is still busy with the last frame.
+                    if (++withoutProgress >= 3) {
+                        break;
+                    }
+
+                    Thread.Sleep(300);
+                } else {
+                    withoutProgress = 0;
+                    previous = actual;
+                }
+            }
+
+            Logger.Error($"Exposure time was not applied: asked for {exposureTime}s but the camera is still at {actual}s after {attempts} attempt(s) over {elapsed.ElapsedMilliseconds}ms. This frame will be exposed at {actual}s, not {exposureTime}s.");
+        }
+
+        public UInt32 StartCapture(UInt32 hDevice, float exposureTime) {
+            ApplyExposureTime(hDevice, exposureTime);
 
             ImageInfo info = new ImageInfo {
                 ImageMode = IMAGEMODE_PASSTHRU,
