@@ -98,11 +98,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public bool TempCompAvailable { get => false; }
 
-        public bool TempComp { get => false; set => throw new NotImplementedException(); }
+        public bool TempComp { get => false; set { } }
 
         public double Temperature { get => double.NaN; }
 
-        public bool HasSetupDialog => throw new NotImplementedException();
+        public bool HasSetupDialog => false;
 
         public string Id { get => _info.Id; }
 
