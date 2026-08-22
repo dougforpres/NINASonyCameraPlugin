@@ -21,7 +21,7 @@ Other fixes:
 - `StartCapture` ignored the result of setting the exposure time, so a rejected shutter speed silently produced a frame at the previous exposure - this is what stops the flat wizard's exposure search from converging. (#5)
 - A cancelled or failed exposure could hand NINA the previously downloaded frame, because the driver only refreshes its image buffer on completion.
 - Failures while attaching a lens or moving focus no longer leave the focuser stuck reporting "moving", and the focuser now raises `PropertyChanged`.
-- Removed the unresolvable `ReachFramework` reference; the build is now warning-clean.
+- Removed the unresolvable `ReachFramework` reference, which raised MSB3245/MSB3243 on every build. The build now produces no compiler or MSBuild warnings; the remaining NU1701 warnings come from legacy packages that only ship .NET Framework targets.
 
 ## 1.0.0.4
 
