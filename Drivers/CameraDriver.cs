@@ -209,11 +209,21 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 if (!BUSY_STATES.Contains(status)) {
-                    Logger.Debug($"Skipping cancel ({reason}); capture status is {status}.");
+                    Logger.Debug($"[thread {Environment.CurrentManagedThreadId}] Skipping cancel ({reason}); capture status is {DescribeCaptureStatus(status)}.");
                     return false;
                 }
 
-                Logger.Info($"Issuing cancel ({reason}); capture status is {status}.");
+                if (status == CAPTURE_READING || status == CAPTURE_PROCESSING) {
+                    // Cancelling mid-download is the specific interleaving that
+                    // was blamed for the access violation in #4: it releases the
+                    // buffer the driver is still filling. The image is seconds
+                    // from being ready anyway, so let it finish and treat this
+                    // as a soft cancel.
+                    Logger.Info($"Skipping cancel ({reason}); the image is already being read from the camera (status {status}). Letting it finish.");
+                    return false;
+                }
+
+                Logger.Info($"[thread {Environment.CurrentManagedThreadId}] Issuing cancel ({reason}); capture status is {DescribeCaptureStatus(status)}.");
                 driver.CancelCapture(camera.Handle);
                 return true;
             } catch (Exception ex) {
@@ -223,6 +233,21 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 if (lockTaken) {
                     Monitor.Exit(_captureLock);
                 }
+            }
+        }
+
+        private static string DescribeCaptureStatus(uint status) {
+            switch (status) {
+                case CAPTURE_CREATED: return "created (0)";
+                case CAPTURE_CAPTURING: return "capturing (1)";
+                case CAPTURE_FAILED: return "failed (2)";
+                case CAPTURE_CANCELLED: return "cancelled (3)";
+                case CAPTURE_COMPLETE: return "complete (4)";
+                case CAPTURE_STARTING: return "starting (0x8001)";
+                case CAPTURE_READING: return "reading from camera (0x8002)";
+                case CAPTURE_PROCESSING: return "processing (0x8003)";
+                case CAPTURE_STATUS_UNKNOWN: return "unknown";
+                default: return $"0x{status:x}";
             }
         }
 
@@ -775,7 +800,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                             throw new SonyException("Problem while waiting for image to be ready (status unavailable)");
                         }
                     }
-                    Logger.Info($"Waiting for image to be ready; current state is {captureStatus}; completion states are {String.Join(", ", COMPLETION_STATES)}.");
+                    Logger.Info($"[thread {Environment.CurrentManagedThreadId}] Waiting for image to be ready; current state is {DescribeCaptureStatus(captureStatus)}; completion states are {String.Join(", ", COMPLETION_STATES.Select(DescribeCaptureStatus))}.");
+
+                    uint previousStatus = captureStatus;
 
                     while (!COMPLETION_STATES.Contains(captureStatus)) {
                         await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), token);
@@ -785,9 +812,18 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                                 throw new SonyException("Problem while waiting for image to be ready (status unavailable)");
                             }
                         }
+
+                        if (captureStatus != previousStatus) {
+                            // Logged per transition rather than per poll: this is
+                            // the trace needed to line a NINA log up against the
+                            // driver's own log when diagnosing a capture that
+                            // wedged or crashed.
+                            Logger.Info($"[thread {Environment.CurrentManagedThreadId}] Capture status {DescribeCaptureStatus(previousStatus)} -> {DescribeCaptureStatus(captureStatus)}.");
+                            previousStatus = captureStatus;
+                        }
                     }
 
-                    Logger.Info($"Wait for image ready complete; completion state is {captureStatus}.");
+                    Logger.Info($"[thread {Environment.CurrentManagedThreadId}] Wait for image ready complete; completion state is {DescribeCaptureStatus(captureStatus)}.");
 
                     // The driver only refreshes its image buffer on a COMPLETE
                     // status. Remember whether this capture actually produced a

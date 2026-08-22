@@ -258,9 +258,10 @@ namespace Sony
             if (!_cameraOpen || handle != _openHandle) {
                 // Already closed, or closed and reopened under a new handle.
                 // Closing twice is what frees memory another thread may still
-                // be reading, so do nothing rather than call the driver again.
+                // be reading, so do nothing rather than call the driver again -
+                // and in particular do not clear _camera, which may now belong
+                // to a different, still-open device.
                 Logger.Debug($"Sony: ignoring close of handle {handle:x}; it is not the open handle.");
-                _camera = null;
                 return;
             }
 
