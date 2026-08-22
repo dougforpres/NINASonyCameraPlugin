@@ -8,6 +8,16 @@ Cancel handling (#4):
 - Serialized capture cancel/start/status checks and treated busy starts as soft cancels.
 - Prevented new exposures from starting when the camera is busy; improved abort behavior without native cancel.
 
+No call into the driver can hang NINA any more:
+
+- Every call is now bounded by a 30s watchdog (60s for opening a camera). Nothing the plugin asks the driver to do is a long operation, so anything past that is the driver's worker thread stuck on a command the camera will never answer. Previously that blocked NINA's imaging thread with no timeout anywhere - one observed session had `StartExposure` never return and sit there for three hours before the process died.
+- When the watchdog fires the camera is reported disconnected and no further calls are made, so the sequence fails visibly and keeps going instead of going silent. The stuck thread cannot be recovered; NINA has to be restarted before the camera can be used again, and the log and the error message both say so.
+- Disconnecting no longer waits behind a stuck call: it gives up after 5s and cleans up locally rather than freezing the UI.
+
+Memory:
+
+- The completed frame is copied out of the driver once, when NINA downloads it, instead of on every capture-status read that happened to see "complete". Status is polled at 10Hz during a capture and read again during the next exposure's preflight, so the same ~25MB frame was being copied to a fresh large-object-heap array several times per exposure.
+
 Driver access is now serialized end to end:
 
 - Every call into `SonyMTPCamera.dll` goes through one lock in `SonyDriver`. The camera and the focuser share a device handle and NINA polls both on their own timers, so gain reads, battery reads, focus reads, capture control and image download were all reaching the driver concurrently.

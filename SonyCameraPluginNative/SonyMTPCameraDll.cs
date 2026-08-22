@@ -60,7 +60,6 @@ namespace Sony {
 
         private IntPtr _dllHandle;
         private string _dllName = "SonyMTPCamera.dll";
-        private byte[] _lastImage = null;
 
 #pragma warning disable 0649
         private dGetSupportedDeviceCount fGetSupportedDeviceCount;
@@ -173,12 +172,6 @@ namespace Sony {
             Delegate d = Marshal.GetDelegateForFunctionPointer(GetExportedFunction(_dllHandle, functionName), delegateType);
 
             field.SetValue(this, d);
-        }
-
-        internal byte[] LastImage {
-            get {
-                return _lastImage;
-            }
         }
 
         internal IntPtr GetExportedFunction(IntPtr hDll, string name) {
@@ -297,18 +290,46 @@ namespace Sony {
                 throw new SonyException("Unable to get image status");
             }
 
-            // If the capture is complete, copy the image
-            if (info.Status == STATUS_COMPLETE) {
-                _lastImage = new byte[info.ImageSize];
+            return info.Status;
+        }
 
-                if (_lastImage == null) {
-                    throw new SonyException("Unable to allocate memory for image");
-                }
+        /// <summary>
+        /// Copies the completed frame out of the driver's buffer.
+        /// <para>
+        /// This used to happen inside <see cref="GetCaptureStatus"/>, on any
+        /// read that saw STATUS_COMPLETE. Status is polled every 100ms during a
+        /// capture and read again during the next exposure's preflight, so the
+        /// same frame was copied more than once - and each copy is a fresh ~25MB
+        /// array on the large object heap, which is never compacted. Doing it
+        /// once, when NINA actually asks to download, is one allocation per
+        /// frame instead of several.
+        /// </para>
+        /// <para>
+        /// A fresh array each time is deliberate: NINA saves the previous frame
+        /// asynchronously, so reusing one buffer would let a new capture
+        /// overwrite an image still being written to disk.
+        /// </para>
+        /// </summary>
+        public byte[] DownloadLastImage(UInt32 hDevice) {
+            ImageInfo info = new ImageInfo();
 
-                Marshal.Copy(info.ImageData, _lastImage, 0, (Int32)info.ImageSize);
+            if (fGetCaptureStatus(hDevice, ref info) != ERROR_SUCCESS) {
+                throw new SonyException("Unable to get image status");
             }
 
-            return info.Status;
+            if (info.Status != STATUS_COMPLETE) {
+                throw new SonyException($"There is no completed image to download (capture status is {info.Status})");
+            }
+
+            if (info.ImageData == IntPtr.Zero || info.ImageSize == 0) {
+                throw new SonyException("The driver reported a completed capture but returned no image data");
+            }
+
+            byte[] image = new byte[info.ImageSize];
+
+            Marshal.Copy(info.ImageData, image, 0, (Int32)info.ImageSize);
+
+            return image;
         }
 
         public CameraInfo GetCameraInfo(UInt32 hDevice, UInt32 Flags) {

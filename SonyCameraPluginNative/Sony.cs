@@ -41,6 +41,27 @@ namespace Sony
         /// </summary>
         private const int LOST_CAMERA_FAILURE_THRESHOLD = 3;
 
+        /// <summary>
+        /// How long any single call into the driver may take before we stop
+        /// waiting for it. Nothing here is a long operation - StartCapture and
+        /// CancelCapture just queue work with the camera and return, and
+        /// GetCaptureStatus copies an already-downloaded buffer - so anything
+        /// past this is the driver's worker thread stuck on an MTP command that
+        /// will never complete. Left unbounded, that call blocks NINA's imaging
+        /// thread indefinitely (observed: a StartExposure that never returned
+        /// and silently burned three hours of a session).
+        /// </summary>
+        private const int NATIVE_CALL_TIMEOUT_MS = 30000;
+
+        /// <summary>Opening a camera enumerates every property, so it gets longer.</summary>
+        private const int OPEN_CAMERA_TIMEOUT_MS = 60000;
+
+        /// <summary>
+        /// Closing must not join the queue behind a stuck call - disconnecting
+        /// is the user's way out, so it gives up quickly and cleans up locally.
+        /// </summary>
+        private const int CLOSE_CAMERA_LOCK_TIMEOUT_MS = 5000;
+
         private readonly object _nativeLock = new object();
 
         private SonyMTPCameraDll _sonydll;
@@ -54,6 +75,14 @@ namespace Sony
         private volatile uint _openHandle = 0;
         private volatile bool _cameraOpen = false;
         private volatile bool _cameraLost = false;
+
+        /// <summary>
+        /// Set when a call into the driver failed to return within the watchdog
+        /// timeout. That thread is still inside the native DLL and cannot be
+        /// recovered, so from this point nothing else is allowed in - the only
+        /// way back is restarting NINA.
+        /// </summary>
+        private volatile bool _driverWedged = false;
 
         private int _consecutiveFailures = 0;
 
@@ -78,23 +107,59 @@ namespace Sony
         /// writes: plenty of bodies advertise a property and then refuse it, and
         /// that must not be mistaken for an unplugged camera.
         /// </param>
-        private T Invoke<T>(uint handle, string what, Func<T> action, bool countsTowardsLoss = true) {
-            lock (_nativeLock) {
+        private T Invoke<T>(uint handle, string what, Func<T> action, bool countsTowardsLoss = true, int timeoutMs = NATIVE_CALL_TIMEOUT_MS) {
+            if (!Monitor.TryEnter(_nativeLock, timeoutMs)) {
+                throw new SonyException($"Timed out after {timeoutMs / 1000}s waiting to {what}: another operation is still running inside the Sony driver.");
+            }
+
+            try {
                 EnsureUsable(handle, what);
 
                 try {
-                    T result = action();
+                    T result = RunWithWatchdog(what, action, timeoutMs);
                     _consecutiveFailures = 0;
                     return result;
                 } catch (Exception ex) {
                     RecordFailure(what, ex, countsTowardsLoss);
                     throw;
                 }
+            } finally {
+                Monitor.Exit(_nativeLock);
             }
         }
 
-        private void Invoke(uint handle, string what, Action action, bool countsTowardsLoss = true) {
-            Invoke<bool>(handle, what, () => { action(); return true; }, countsTowardsLoss);
+        private void Invoke(uint handle, string what, Action action, bool countsTowardsLoss = true, int timeoutMs = NATIVE_CALL_TIMEOUT_MS) {
+            Invoke<bool>(handle, what, () => { action(); return true; }, countsTowardsLoss, timeoutMs);
+        }
+
+        /// <summary>
+        /// Runs a native call on a worker thread and stops waiting for it after
+        /// <paramref name="timeoutMs"/>.
+        /// <para>
+        /// A blocked P/Invoke cannot be aborted, so the worker is abandoned
+        /// rather than killed and the driver is marked wedged so nothing else
+        /// follows it in. The point is not to recover the driver - it is to give
+        /// the caller back its thread. NINA can then fail the exposure, log it
+        /// and tell the user, instead of an imaging thread disappearing into the
+        /// DLL for the rest of the night.
+        /// </para>
+        /// <para>Caller must hold <see cref="_nativeLock"/>.</para>
+        /// </summary>
+        private T RunWithWatchdog<T>(string what, Func<T> action, int timeoutMs) {
+            var call = Task.Run(action);
+
+            if (!call.Wait(timeoutMs)) {
+                _driverWedged = true;
+                _cameraOpen = false;
+                _camera = null;
+
+                Logger.Error($"Sony: the driver did not return from '{what}' within {timeoutMs / 1000}s. That thread is stuck inside SonyMTPCamera.dll and cannot be recovered; no further calls will be made. Restart NINA to use the camera again.");
+
+                throw new SonyException($"The Sony driver stopped responding while trying to {what}. Restart NINA to recover the camera.");
+            }
+
+            // Unwraps to the original exception rather than an AggregateException.
+            return call.GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -117,7 +182,7 @@ namespace Sony
                 EnsureUsable(handle, what);
 
                 try {
-                    result = action();
+                    result = RunWithWatchdog(what, action, NATIVE_CALL_TIMEOUT_MS);
                     _consecutiveFailures = 0;
                     return true;
                 } catch (Exception ex) {
@@ -131,6 +196,10 @@ namespace Sony
 
         /// <summary>Caller must hold <see cref="_nativeLock"/>.</summary>
         private void EnsureUsable(uint handle, string what) {
+            if (_driverWedged) {
+                throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. Restart NINA to recover the camera.");
+            }
+
             if (_cameraLost) {
                 throw new SonyException($"Cannot {what}: the camera is no longer responding and has been disconnected.");
             }
@@ -194,17 +263,36 @@ namespace Sony
         public IEnumerable<SonyDevice> Cameras() {
             // Materialized rather than yielded: the caller must not be able to
             // hold the enumerator open across the lock.
-            List<SonyDevice> cameras = new List<SonyDevice>();
-
-            lock (_nativeLock) {
+            return InvokeUnhandled("enumerate cameras", () => {
+                List<SonyDevice> cameras = new List<SonyDevice>();
                 uint count = _sonydll.GetSupportedDeviceCount();
 
                 for (uint i = 0; i < count; i++) {
                     cameras.Add(new SonyDevice(_sonydll.GetSupportedDeviceInfo(i)));
                 }
+
+                return cameras;
+            }, NATIVE_CALL_TIMEOUT_MS);
+        }
+
+        /// <summary>
+        /// Lock + watchdog for the calls that are not tied to an open handle
+        /// (device and lens enumeration, open).
+        /// </summary>
+        private T InvokeUnhandled<T>(string what, Func<T> action, int timeoutMs) {
+            if (!Monitor.TryEnter(_nativeLock, timeoutMs)) {
+                throw new SonyException($"Timed out after {timeoutMs / 1000}s waiting to {what}: another operation is still running inside the Sony driver.");
             }
 
-            return cameras;
+            try {
+                if (_driverWedged) {
+                    throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. Restart NINA to recover the camera.");
+                }
+
+                return RunWithWatchdog(what, action, timeoutMs);
+            } finally {
+                Monitor.Exit(_nativeLock);
+            }
         }
 
         public SonyCameraInfo CameraInfo {
@@ -212,7 +300,7 @@ namespace Sony
         }
 
         public SonyCameraInfo OpenCamera(string path) {
-            lock (_nativeLock) {
+            return InvokeUnhandled($"open camera '{path}'", () => {
                 if (_cameraOpen) {
                     Logger.Warning($"Sony: a camera is already open (handle {_openHandle:x}); closing it before opening '{path}'.");
                     CloseCameraInternal(_openHandle);
@@ -244,12 +332,34 @@ namespace Sony
                 _consecutiveFailures = 0;
 
                 return _camera;
-            }
+            }, OPEN_CAMERA_TIMEOUT_MS);
         }
 
         public void CloseCamera(uint handle) {
-            lock (_nativeLock) {
+            // Disconnecting is the user's escape hatch, so it must not wait on
+            // whatever else is in the driver. If we cannot get in quickly we
+            // forget the handle locally and leave the device open rather than
+            // block the UI - calling CloseDevice while another thread is inside
+            // the driver is exactly the double-free we are trying to avoid.
+            if (!Monitor.TryEnter(_nativeLock, CLOSE_CAMERA_LOCK_TIMEOUT_MS)) {
+                Logger.Error($"Sony: could not close handle {handle:x} within {CLOSE_CAMERA_LOCK_TIMEOUT_MS / 1000}s because the driver is busy. Marking the camera closed without calling the driver; restart NINA before reconnecting.");
+                _driverWedged = true;
+                _cameraOpen = false;
+                _camera = null;
+                return;
+            }
+
+            try {
+                if (_driverWedged) {
+                    Logger.Warning($"Sony: not calling the driver to close handle {handle:x}; it stopped responding earlier in this session.");
+                    _cameraOpen = false;
+                    _camera = null;
+                    return;
+                }
+
                 CloseCameraInternal(handle);
+            } finally {
+                Monitor.Exit(_nativeLock);
             }
         }
 
@@ -298,9 +408,6 @@ namespace Sony
         }
 
         public uint GetCaptureStatus(uint handle) {
-            // Note this also copies the completed image out of the driver's
-            // buffer, so it must run under the lock: the buffer is freed by
-            // CancelCapture / CloseDevice.
             return Invoke(handle, "read capture status", () => _sonydll.GetCaptureStatus(handle));
         }
 
@@ -312,24 +419,26 @@ namespace Sony
             Invoke(handle, "cancel the capture", () => _sonydll.CancelCapture(handle));
         }
 
-        public byte[] GetLastImage() {
-            lock (_nativeLock) {
-                return _sonydll.LastImage;
-            }
+        /// <summary>
+        /// Copies the completed frame out of the driver. Runs under the lock so
+        /// it cannot overlap a cancel or a close, which is what frees the buffer
+        /// being read.
+        /// </summary>
+        public byte[] DownloadLastImage(uint handle) {
+            return Invoke(handle, "download the last image", () => _sonydll.DownloadLastImage(handle));
         }
 
         public IEnumerable<SonyLens> Lenses() {
-            List<SonyLens> lenses = new List<SonyLens>();
-
-            lock (_nativeLock) {
+            return InvokeUnhandled("enumerate lenses", () => {
+                List<SonyLens> lenses = new List<SonyLens>();
                 int count = _sonydll.GetLensCount();
 
                 for (uint i = 0; i < count; i++) {
                     lenses.Add(new SonyLens(_sonydll.GetLensInfo(i)));
                 }
-            }
 
-            return lenses;
+                return lenses;
+            }, NATIVE_CALL_TIMEOUT_MS);
         }
 
         public void SetAttachedLens(uint handle, string path) {

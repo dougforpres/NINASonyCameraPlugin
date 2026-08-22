@@ -847,11 +847,17 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public Task<IExposureData> DownloadExposure(CancellationToken token) {
             return Task.Run<IExposureData>(() => {
+                var camera = _camera;
+
+                if (camera == null) {
+                    throw new SonyException("Cannot download the exposure: the camera is disconnected.");
+                }
+
                 if (!_lastCaptureProducedImage) {
                     throw new SonyException("The last exposure did not complete, so there is no image to download.");
                 }
 
-                byte[] rawImageData = SonyDriver.GetInstance().GetLastImage();
+                byte[] rawImageData = SonyDriver.GetInstance().DownloadLastImage(camera.Handle);
 
                 if (rawImageData == null || rawImageData.Length == 0) {
                     throw new SonyException("The driver returned no image data for the last exposure.");
