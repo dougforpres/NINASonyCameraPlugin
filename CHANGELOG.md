@@ -2,6 +2,12 @@
 
 ## 1.0.0.5
 
+Exposure time actually reaching the camera (#5):
+
+- Shutter speed on these bodies is a Range property: the driver cannot assign it, only step the camera one click at a time. When a step has no effect - which is what happens when frames are taken back to back, because the camera ignores it for a moment after handing over the previous image - the driver gives up and starts the capture at the old speed anyway. Every frame of a flat wizard search was being exposed at whatever the first one used, so the measured ADU never moved and the search could not converge. By hand in the imaging tab it works, because there are pauses between frames.
+- The plugin now reads the shutter speed back after setting it and re-issues the change until the camera is within a quarter-stop of the request, or gives up after 12s and says so at ERROR level rather than silently exposing at the wrong speed.
+- Verified on an ILCE-7S: 21 captures, 17 needed the retry, all 17 reached the requested exposure (typically 2 extra attempts over 3-5s), and the sky flat search converged. The root cause is in `SonyMTPCamera.dll` (`DLL.cpp`, `NudgePropertyAndWait` waits 2s for the property to move and the caller stops on the first stall, while `SetPropertyValue` returns `ERROR_SUCCESS` regardless), so this is a workaround rather than a fix.
+
 Cancel handling (#4):
 
 - Added native cancel option in plugin settings and defaulted to off to avoid crashes.
