@@ -59,6 +59,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // NINA's poll path.
         private IReadOnlyList<PropertyValueOption> _isoOptions = Array.Empty<PropertyValueOption>();
 
+        // The ISO options as NINA sees them (AUTO presented as 0). Single source
+        // of truth for Gains, GainMin and GainMax so they cannot disagree.
+        private IList<int> _gains = Array.Empty<int>();
+
         // Last values successfully read from the camera, reported when a poll
         // read is skipped or fails so the UI does not flap.
         private int _lastKnownGain = -1;
@@ -144,6 +148,21 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         private IReadOnlyList<PropertyValueOption> GetAvailableIsoOptions() {
             return _isoOptions;
+        }
+
+        /// <summary>
+        /// Maps the camera's ISO options to the gain values NINA works with.
+        /// AUTO (0xffffff) is presented as 0, matching what the Gain getter
+        /// reports back.
+        /// </summary>
+        private static IList<int> ToGains(IReadOnlyList<PropertyValueOption> isoOptions) {
+            List<int> gains = new List<int>();
+
+            foreach (var iso in isoOptions) {
+                gains.Add(iso.Value == 0xffffff ? 0 : (int)iso.Value);
+            }
+
+            return gains;
         }
 
         private void NotifyGainPropertiesChanged() {
@@ -416,37 +435,23 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public bool CanGetGain => GetAvailableIsoOptions().Any();
+        public bool CanGetGain => _gains.Count > 0;
 
         public bool CanSetGain => CanGetGain;
 
-        public int GainMax {
-            get {
-                var isoOptions = GetAvailableIsoOptions();
-                if (!isoOptions.Any()) {
-                    if (_camera != null) {
-                        Logger.Error("Problem getting gain max: camera did not report ISO options.");
-                    }
-                    return -1;
-                }
+        // GainMin/GainMax are derived from the same list Gains exposes, so the
+        // range can never exclude a value the dropdown offers. They used to be
+        // taken from the raw ISO options instead: AUTO is 0xffffff there but is
+        // presented to NINA as 0, so the reported minimum was the lowest real
+        // ISO and picking AUTO failed validation with "Gain has to be set
+        // between 50 and 128000 but is set to 0" - which aborted the flat
+        // wizard before it took a single frame. GainMax had the mirror-image
+        // problem: it used Last() rather than the maximum, so a list with AUTO
+        // at the end reported 16777215.
 
-                return (int)isoOptions.Last().Value;
-            }
-        }
+        public int GainMax => _gains.Count > 0 ? _gains.Max() : -1;
 
-        public int GainMin {
-            get {
-                var isoOptions = GetAvailableIsoOptions();
-                if (!isoOptions.Any()) {
-                    if (_camera != null) {
-                        Logger.Error("Problem getting gain min: camera did not report ISO options.");
-                    }
-                    return -1;
-                }
-
-                return (int)isoOptions.Min(o => o.Value);
-            }
-        }
+        public int GainMin => _gains.Count > 0 ? _gains.Min() : -1;
 
         public int Gain {
             get {
@@ -476,21 +481,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public IList<int> Gains {
-            get {
-                List<int> gains = new List<int>();
-
-                foreach (var iso in GetAvailableIsoOptions()) {
-                    if (iso.Value == 0xffffff) {
-                        gains.Add(0); // AUTO
-                    } else {
-                        gains.Add((int)iso.Value);
-                    }
-                }
-
-                return gains;
-            }
-        }
+        public IList<int> Gains => _gains;
 
         public string Id => "Sony";
 
@@ -650,6 +641,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 try {
                     _camera = SonyDriver.GetInstance().OpenCamera(_device.Id);
                     _isoOptions = ReadIsoOptions();
+                    _gains = ToGains(_isoOptions);
+                    Logger.Info($"Sony camera gain range is {(_gains.Count > 0 ? $"{_gains.Min()}..{_gains.Max()} ({_gains.Count} values, {(_gains.Contains(0) ? "including" : "no")} AUTO)" : "unavailable")}.");
                     _lastKnownGain = -1;
                     _lastKnownBatteryLevel = 0;
                     _softCancelRequested = false;
@@ -657,6 +650,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     Logger.Error(ex);
                     _camera = null;
                     _isoOptions = Array.Empty<PropertyValueOption>();
+                    _gains = Array.Empty<int>();
                 }
 
                 NotifyGainPropertiesChanged();
@@ -674,6 +668,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             // out from under an in-flight command.
             _camera = null;
             _isoOptions = Array.Empty<PropertyValueOption>();
+            _gains = Array.Empty<int>();
             _softCancelRequested = false;
 
             if (camera != null) {

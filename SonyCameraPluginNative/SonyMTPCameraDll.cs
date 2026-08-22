@@ -275,6 +275,16 @@ namespace Sony {
                 Logger.Warning($"The driver cannot set the exposure time on this camera (no learnt exposure-time list), so {exposureTime}s was not applied - the camera's own shutter speed will be used. Run SonyCameraInfo with the camera connected to learn its exposure times.");
             } else if (hr != ERROR_SUCCESS) {
                 throw new SonyException($"Unable to set exposure time to {exposureTime}s, error {hr}");
+            } else if (!string.IsNullOrEmpty(value.Text)) {
+                // A camera only has discrete shutter speeds, so the driver picks
+                // the nearest one and reports success. Log what was actually
+                // applied next to what was asked for: when a search like the
+                // flat wizard's narrows below the gap between adjacent shutter
+                // speeds, every further step produces an identical exposure and
+                // the search cannot converge. Without this the requested value
+                // is all that appears in the log and the two look the same.
+                // Info rather than Debug so it is present in a default NINA log.
+                Logger.Info($"Exposure time requested {exposureTime}s; camera set to '{value.Text}' (0x{value.Value:x8})");
             }
 
             ImageInfo info = new ImageInfo {
