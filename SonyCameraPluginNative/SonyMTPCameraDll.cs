@@ -389,7 +389,11 @@ namespace Sony {
                 if (actual == previous) {
                     // The camera is not moving. Give it a moment - this is
                     // normally because it is still busy with the last frame.
-                    if (++withoutProgress >= 3) {
+                    // A stalled attempt already costs ~2s inside the driver
+                    // (NudgePropertyAndWait waits 40 x 50ms for the property to
+                    // change), so let the overall time budget decide when to
+                    // stop rather than this counter.
+                    if (++withoutProgress >= 5) {
                         break;
                     }
 
