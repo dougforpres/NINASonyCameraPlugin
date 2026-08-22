@@ -31,6 +31,7 @@ https://github.com/dougforpres/NINASonyCameraPlugin/releases
 - Binning and sub-sampling are not supported; captures use the full sensor frame.
 - For exposures <= 30s the driver chooses the nearest built-in shutter speed; longer exposures fall back to Bulb.
 - Powering off/unplugging the camera while connected can crash NINA via Windows' MTP stack (PortableDeviceApi.dll access violation); disconnect in NINA first to avoid it.
+- The “Enable native cancel” option calls the camera’s CancelCapture; stability varies by body and Windows driver stack. Leave it off if you see crashes when aborting exposures.
 
 ## Support
 
@@ -43,7 +44,7 @@ https://github.com/dougforpres/NINASonyCameraPlugin/releases
 
 ## Metadata
 
-- Version: 1.0.0.4
+- Version: 1.0.0.5
 - Author: Doug Henderson
 - Contributors: Lucas Lepski [@ShurkanTwo](https://github.com/shurkanTwo)
 - Minimum NINA version: 3.2.0.3001

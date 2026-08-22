@@ -2,6 +2,7 @@
 using NINA.Equipment.Interfaces.ViewModel;
 using NINA.Equipment.Interfaces;
 using NINA.Profile.Interfaces;
+using NINA.Profile;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.ComponentModel.Composition;
+using NINA.RetroKiwi.Plugin.SonyCamera;
 using NINA.Image.Interfaces;
 using NINA.WPF.Base.Mediator;
 using Sony;
@@ -24,11 +26,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private IProfileService profileService;
         private IExposureDataFactory exposureDataFactory;
         SonyDriver driver;
+        private readonly PluginOptionsAccessor pluginSettings;
 
         [ImportingConstructor]
         public CameraProvider(IProfileService profileService, IExposureDataFactory exposureDataFactory) {
             this.profileService = profileService;
             this.exposureDataFactory = exposureDataFactory;
+            this.pluginSettings = new PluginOptionsAccessor(profileService, SonyCamera.PluginGuid);
 
             if (!DllLoader.IsX86()) {
                 try {
@@ -43,14 +47,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public IList<ICamera> GetEquipment() {
             var devices = new List<ICamera>();
-
             if (this.driver != null) {
                 try {
                     int count = 0;
 
                     foreach (var sonyDevice in driver.Cameras()) {
                         count++;
-                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice));
+                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice, pluginSettings, false));
                     }
 
                     Logger.Info($"Found {count} Sony Cameras");
