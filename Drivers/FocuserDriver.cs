@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,11 +31,19 @@ using Sony;
 
 namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
     public class FocuserDriver : IFocuser, IDisposable {
+        // NINA polls Position/MaxIncrement on the focuser's device-update timer,
+        // and the focuser shares its device handle with the camera. Rather than
+        // let a poll queue up behind a 25MB image download, give up quickly and
+        // report the last known value.
+        private const int POLL_READ_TIMEOUT_MS = 500;
+
         private bool disposedValue;
         internal SonyLens _info;
         internal IProfileService _profileService;
         internal bool _moving = false;
         internal bool _connected = false;
+        private int _lastKnownPosition = 0;
+        private int _lastKnownMaxIncrement = 0;
 
         public FocuserDriver(IProfileService profileService, SonyLens info) {
             _profileService = profileService;
@@ -43,12 +52,40 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public event PropertyChangedEventHandler PropertyChanged;
 
+        private void RaisePropertyChanged([CallerMemberName] string propertyName = null) {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        private bool Moving {
+            get => _moving;
+            set {
+                if (_moving != value) {
+                    _moving = value;
+                    RaisePropertyChanged(nameof(IsMoving));
+                }
+            }
+        }
+
+        private bool IsConnected {
+            get => _connected;
+            set {
+                if (_connected != value) {
+                    _connected = value;
+                    RaisePropertyChanged(nameof(Connected));
+                }
+            }
+        }
+
         public bool IsMoving { get => _moving; }
 
         private uint GetCameraHandle() {
-            SonyCameraInfo camera = SonyDriver.GetInstance().CameraInfo;
+            SonyDriver driver = SonyDriver.GetInstance();
+            SonyCameraInfo camera = driver.CameraInfo;
 
-            if (camera != null) {
+            // Also confirm the handle is still open: the driver drops it when the
+            // camera stops responding, and the focuser must not keep issuing
+            // focus commands against a handle the camera side has abandoned.
+            if (camera != null && driver.IsOpen(camera.Handle)) {
                 return camera.Handle;
             }
             else
@@ -62,7 +99,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 uint hCamera = GetCameraHandle();
 
                 if (hCamera != 0) {
-                    return (int)SonyDriver.GetInstance().GetFocusLimit(hCamera);
+                    try {
+                        if (SonyDriver.GetInstance().TryGetFocusLimit(hCamera, POLL_READ_TIMEOUT_MS, out uint limit)) {
+                            _lastKnownMaxIncrement = (int)limit;
+                        }
+                    } catch (Exception ex) {
+                        Logger.Debug($"Unable to read focus limit: {ex.Message}");
+                    }
+
+                    return _lastKnownMaxIncrement;
                 }
                 else {
                     return 0;
@@ -77,7 +122,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 uint hCamera = GetCameraHandle();
 
                 if (hCamera != 0) {
-                    return (int)SonyDriver.GetInstance().GetFocusPosition(hCamera);
+                    try {
+                        if (SonyDriver.GetInstance().TryGetFocusPosition(hCamera, POLL_READ_TIMEOUT_MS, out uint position)) {
+                            _lastKnownPosition = (int)position;
+                        }
+                    } catch (Exception ex) {
+                        Logger.Debug($"Unable to read focus position: {ex.Message}");
+                    }
+
+                    return _lastKnownPosition;
                 } else {
                     return 0;
                 }
@@ -87,9 +140,16 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 uint hCamera = GetCameraHandle();
 
                 if (hCamera != 0) {
-                    _moving = true;
-                    SonyDriver.GetInstance().SetFocusPosition(hCamera, (uint)value);
-                    _moving = false;
+                    Moving = true;
+
+                    try {
+                        SonyDriver.GetInstance().SetFocusPosition(hCamera, (uint)value);
+                        _lastKnownPosition = value;
+                    } catch (Exception ex) {
+                        Logger.Error($"Problem moving focus to {value}", ex);
+                    } finally {
+                        Moving = false;
+                    }
                 }
             }
         }
@@ -120,8 +180,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                     if (hCamera == 0) {
                         Logger.Debug("Sony camera was disconnected without closing focuser first, cleaning up");
-                        _connected = false;
-                        _moving = false;
+                        IsConnected = false;
+                        Moving = false;
                     }
                 }
 
@@ -142,17 +202,23 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public Task<bool> Connect(CancellationToken token) {
-            _moving = false;
+            Moving = false;
 
             return Task<bool>.Run(() => {
                 UInt32 hCamera = GetCameraHandle();
 
                 if (hCamera != 0) {
-                    _connected = true;
+                    Moving = true;
 
-                    _moving = true;
-                    SonyDriver.GetInstance().SetAttachedLens(hCamera, Id);
-                    _moving = false;
+                    try {
+                        SonyDriver.GetInstance().SetAttachedLens(hCamera, Id);
+                        IsConnected = true;
+                    } catch (Exception ex) {
+                        Logger.Error($"Unable to attach lens '{Id}'", ex);
+                        Notification.ShowError($"Unable to attach lens '{Id}': {ex.Message}");
+                    } finally {
+                        Moving = false;
+                    }
                 } else {
                     Notification.ShowWarning(Loc.Instance["LblNoCameraConnected"]);
                 }
@@ -162,8 +228,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public void Disconnect() {
-            _moving = false;
-            _connected = false;
+            Moving = false;
+            IsConnected = false;
         }
 
         public void Halt() {
@@ -174,7 +240,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             UInt32 hCamera = GetCameraHandle();
 
             if (hCamera != 0) {
-                _moving = true;
+                Moving = true;
 
                 return Task.Run(() => {
                     try {
@@ -183,7 +249,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                         Logger.Error(ex);
                     }
 
-                    _moving = false;
+                    Moving = false;
                 });
             }
             else

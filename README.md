@@ -30,8 +30,9 @@ https://github.com/dougforpres/NINASonyCameraPlugin/releases
 - Temperature is not reported (the plugin does not request processed ARW metadata).
 - Binning and sub-sampling are not supported; captures use the full sensor frame.
 - For exposures <= 30s the driver chooses the nearest built-in shutter speed; longer exposures fall back to Bulb.
-- Powering off/unplugging the camera while connected can crash NINA via Windows' MTP stack (PortableDeviceApi.dll access violation); disconnect in NINA first to avoid it.
+- Powering off/unplugging the camera while connected can still crash NINA via Windows' MTP stack (PortableDeviceApi.dll access violation); always disconnect in NINA first. The plugin now stops talking to a camera that has stopped responding and reports it as disconnected, which closes the window in which this happens, but an access violation raised inside the native driver cannot be caught from managed code - if it happens on the very first call after the camera vanishes, NINA still goes down.
 - The “Enable native cancel” option calls the camera’s CancelCapture; stability varies by body and Windows driver stack. Leave it off if you see crashes when aborting exposures.
+- Make sure the installed Sony driver really is 1.0.1.17 or newer. Up to 1.0.0.5 the plugin's version check compared the build and revision fields the wrong way round, so an old 1.0.0.x driver was accepted and then failed in confusing ways. The check is now correct and will refuse to load against a driver that is too old.
 
 ## Support
 

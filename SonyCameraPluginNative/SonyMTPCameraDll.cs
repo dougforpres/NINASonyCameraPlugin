@@ -118,11 +118,15 @@ namespace Sony {
             // Confirm the driver version meets the minimum required 1.0.1.16
             FileVersionInfo dllVersion = FileVersionInfo.GetVersionInfo(filename);
 
-            int[] v = { dllVersion.ProductMajorPart, dllVersion.ProductMinorPart, dllVersion.ProductPrivatePart, dllVersion.ProductBuildPart };
-
             if (dllVersion == null) {
                 throw new SonyException("The loaded Sony dll does not have version info - this is invalid");
             }
+
+            // Order matters: a.b.c.d maps to Major.Minor.Build.Private. Having
+            // Build and Private the wrong way round here made 1.0.0.36 compare
+            // as 1.0.36.0, which sails past the 1.0.1.17 minimum - so a driver
+            // from 2022 was being accepted and then misbehaving at runtime.
+            int[] v = { dllVersion.ProductMajorPart, dllVersion.ProductMinorPart, dllVersion.ProductBuildPart, dllVersion.ProductPrivatePart };
 
             Logger.Info($"Using Sony driver dll @ {filename} with version {dllVersion.ProductVersion}");
 
@@ -255,7 +259,18 @@ namespace Sony {
         public UInt32 StartCapture(UInt32 hDevice, float exposureTime) {
             PropertyValue value = new PropertyValue();
 
-            fSetExposureTime(hDevice, exposureTime, ref value);
+            // The result of this used to be discarded. When the camera refuses
+            // the new shutter speed the capture then went ahead at whatever was
+            // set previously, which is what makes the flat wizard's search
+            // never converge: it thinks it changed the exposure, and the frames
+            // keep coming back at the old one.
+            uint hr = fSetExposureTime(hDevice, exposureTime, ref value);
+
+            if (hr != ERROR_SUCCESS) {
+                throw new SonyException($"Unable to set exposure time to {exposureTime}s, error {hr}");
+            }
+
+            Logger.Debug($"Exposure time set to {exposureTime}s; camera reports '{value.Text}' (0x{value.Value:x})");
 
             ImageInfo info = new ImageInfo {
                 ImageMode = IMAGEMODE_PASSTHRU,

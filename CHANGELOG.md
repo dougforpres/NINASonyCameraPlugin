@@ -2,9 +2,26 @@
 
 ## 1.0.0.5
 
+Cancel handling (#4):
+
 - Added native cancel option in plugin settings and defaulted to off to avoid crashes.
 - Serialized capture cancel/start/status checks and treated busy starts as soft cancels.
 - Prevented new exposures from starting when the camera is busy; improved abort behavior without native cancel.
+
+Driver access is now serialized end to end:
+
+- Every call into `SonyMTPCamera.dll` goes through one lock in `SonyDriver`. The camera and the focuser share a device handle and NINA polls both on their own timers, so gain reads, battery reads, focus reads, capture control and image download were all reaching the driver concurrently.
+- Closing the camera invalidates the handle under that same lock, and calls made against a stale handle are refused instead of reaching the driver. Closing a device while another thread was mid-command was the case that freed memory out from under an in-flight read.
+- When the camera stops answering (unplugged, powered off, USB dropped) the driver handle is closed once and the camera is reported as disconnected, rather than being polled indefinitely.
+- Property reads that NINA polls on a timer (battery, gain, focus position, focus limit) no longer queue behind an image download; they time out and report the last known value.
+
+Other fixes:
+
+- The minimum-driver-version check compared the build and revision fields the wrong way round, so a 1.0.0.x driver passed the 1.0.1.17 minimum and then failed later with `Unable to locate method 'GetSupportedDeviceCount'`. (#2)
+- `StartCapture` ignored the result of setting the exposure time, so a rejected shutter speed silently produced a frame at the previous exposure - this is what stops the flat wizard's exposure search from converging. (#5)
+- A cancelled or failed exposure could hand NINA the previously downloaded frame, because the driver only refreshes its image buffer on completion.
+- Failures while attaching a lens or moving focus no longer leave the focuser stuck reporting "moving", and the focuser now raises `PropertyChanged`.
+- Removed the unresolvable `ReachFramework` reference; the build is now warning-clean.
 
 ## 1.0.0.4
 

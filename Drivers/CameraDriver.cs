@@ -44,9 +44,31 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private static readonly uint[] BUSY_STATES = { CAPTURE_CAPTURING, CAPTURE_PROCESSING, CAPTURE_STARTING, CAPTURE_READING };
         private static readonly uint[] COMPLETION_STATES = { CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
 
+        // How long a poll-driven property read (battery, gain) will wait for the
+        // driver before giving up and reporting the last known value. NINA polls
+        // these on a 2s timer; an image download can hold the driver for longer
+        // than that, and stalling the timer behind it just makes NINA complain.
+        private const int POLL_READ_TIMEOUT_MS = 500;
+
         private readonly PluginOptionsAccessor _pluginSettings;
         private readonly bool _enableNativeCancelDefault;
-        private bool _softCancelRequested;
+        private volatile bool _softCancelRequested;
+
+        // Set when a capture reaches CAPTURE_COMPLETE. The driver keeps the last
+        // downloaded frame in its own buffer and only replaces it on completion,
+        // so without this a cancelled or failed exposure would hand NINA the
+        // previous frame again.
+        private volatile bool _lastCaptureProducedImage;
+
+        // Cached because the ISO option list comes from the property descriptors
+        // read once at open time, and CanGetGain/Gains/GainMin/GainMax are all on
+        // NINA's poll path.
+        private IReadOnlyList<PropertyValueOption> _isoOptions = Array.Empty<PropertyValueOption>();
+
+        // Last values successfully read from the camera, reported when a poll
+        // read is skipped or fails so the UI does not flap.
+        private int _lastKnownGain = -1;
+        private int _lastKnownBatteryLevel = 0;
 
         private SonyCameraInfo _camera = null;
         private SonyDevice _device = null;
@@ -73,7 +95,38 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             return SonyDriver.GetInstance().GetProperty(_camera.Handle, id);
         }
 
-        private IReadOnlyList<PropertyValueOption> GetAvailableIsoOptions() {
+        /// <summary>
+        /// Reads a property that NINA polls on a timer, without waiting on the
+        /// driver. Returns the supplied fallback when the driver is busy or the
+        /// read fails, so a poll can never stall or throw into NINA's timer.
+        /// </summary>
+        private bool TryReadPolledProperty(uint propertyId, out uint value) {
+            value = 0;
+
+            var camera = _camera;
+            if (camera == null) {
+                return false;
+            }
+
+            try {
+                if (SonyDriver.GetInstance().TryGetProperty(camera.Handle, propertyId, POLL_READ_TIMEOUT_MS, out PropertyValue property)) {
+                    value = property.Value;
+                    return true;
+                }
+            } catch (Exception ex) {
+                Logger.Debug($"Polled read of property 0x{propertyId:X} failed: {ex.Message}");
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Works out the ISO list once per connection. The options come from the
+        /// property descriptors the driver hands over at open time, so they do
+        /// not change while connected - and re-deriving them on every poll of
+        /// CanGetGain used to re-log the same warning several times a second.
+        /// </summary>
+        private IReadOnlyList<PropertyValueOption> ReadIsoOptions() {
             if (_camera == null) {
                 return Array.Empty<PropertyValueOption>();
             }
@@ -93,6 +146,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
             Logger.Warning("Camera did not report any ISO options via known properties (registry ISO list may be empty until the camera learns it).");
             return Array.Empty<PropertyValueOption>();
+        }
+
+        private IReadOnlyList<PropertyValueOption> GetAvailableIsoOptions() {
+            return _isoOptions;
         }
 
         private void NotifyGainPropertiesChanged() {
@@ -122,7 +179,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         private bool TryCancelCaptureIfEnabled(string reason, int lockTimeoutMs = 1000) {
-            if (_camera == null) {
+            var camera = _camera;
+
+            if (camera == null) {
                 return false;
             }
 
@@ -155,7 +214,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 Logger.Info($"Issuing cancel ({reason}); capture status is {status}.");
-                driver.CancelCapture(_camera.Handle);
+                driver.CancelCapture(camera.Handle);
                 return true;
             } catch (Exception ex) {
                 Logger.Error($"CancelCapture failed ({reason}).", ex);
@@ -168,8 +227,17 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         private bool TryGetCaptureStatus(SonyDriver driver, out uint status, string reason) {
+            status = CAPTURE_STATUS_UNKNOWN;
+
+            var camera = _camera;
+
+            if (camera == null) {
+                Logger.Warning($"Unable to get capture status ({reason}); the camera is disconnected.");
+                return false;
+            }
+
             try {
-                status = driver.GetCaptureStatus(_camera.Handle);
+                status = driver.GetCaptureStatus(camera.Handle);
                 return true;
             } catch (Exception ex) {
                 Logger.Warning($"Unable to get capture status ({reason}); camera may not have responded: {ex.Message}.");
@@ -311,11 +379,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public int BatteryLevel {
             get {
-                if (_camera != null) {
-                    return (int)GetPropertyValue(PROPID_BATTERY).Value;
-                } else {
-                    return 0;
+                if (TryReadPolledProperty(PROPID_BATTERY, out uint level)) {
+                    _lastKnownBatteryLevel = (int)level;
                 }
+
+                return _camera != null ? _lastKnownBatteryLevel : 0;
             }
         }
 
@@ -363,24 +431,24 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public int Gain {
             get {
-                if (_camera != null) {
-                    try {
-                        PropertyValue value = GetPropertyValue(PROPID_ISO);
-
-                        return (int)(value.Value == 0xffffff ? 0 : value.Value);
-                    } catch (Exception ex) {
-                        Logger.Error("Problem getting gain.", ex);
-                        return -1;
-                    }
-                } else {
+                if (_camera == null) {
                     return -1;
                 }
+
+                if (TryReadPolledProperty(PROPID_ISO, out uint iso)) {
+                    _lastKnownGain = (int)(iso == 0xffffff ? 0 : iso);
+                }
+
+                return _lastKnownGain;
             }
 
             set {
-                if (_camera != null) {
+                var camera = _camera;
+
+                if (camera != null) {
                     try {
-                        SonyDriver.GetInstance().SetProperty(_camera.Handle, PROPID_ISO, (uint)value);
+                        SonyDriver.GetInstance().SetProperty(camera.Handle, PROPID_ISO, (uint)value);
+                        _lastKnownGain = value;
                         RaisePropertyChanged(nameof(Gain));
                     } catch (Exception ex) {
                         Logger.Error($"Problem setting gain to {value}.", ex);
@@ -421,7 +489,25 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public bool Connected {
             get {
-                return _camera != null;
+                var camera = _camera;
+
+                if (camera == null) {
+                    return false;
+                }
+
+                // The driver closes the handle itself if the camera stops
+                // responding (unplugged, powered off, USB dropped). Report that
+                // as disconnected so NINA stops driving a dead handle rather
+                // than polling it until something faults inside the native DLL.
+                if (!SonyDriver.GetInstance().IsOpen(camera.Handle)) {
+                    Logger.Warning("Sony camera is no longer open; reporting it as disconnected.");
+                    _camera = null;
+                    NotifyGainPropertiesChanged();
+                    RaisePropertyChanged(nameof(Connected));
+                    return false;
+                }
+
+                return true;
             }
         }
 
@@ -544,32 +630,54 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             return Task.Run<bool>(() => {
                 try {
                     _camera = SonyDriver.GetInstance().OpenCamera(_device.Id);
+                    _isoOptions = ReadIsoOptions();
+                    _lastKnownGain = -1;
+                    _lastKnownBatteryLevel = 0;
+                    _softCancelRequested = false;
                 } catch (Exception ex) {
                     Logger.Error(ex);
                     _camera = null;
+                    _isoOptions = Array.Empty<PropertyValueOption>();
                 }
 
                 NotifyGainPropertiesChanged();
+                RaisePropertyChanged(nameof(Connected));
                 return _camera != null;
             });
         }
 
         public void Disconnect() {
-            if (_camera != null) {
+            var camera = _camera;
+
+            // Clear our handle first. Anything still polling (NINA's device
+            // update timer, a capture wait loop) then stops calling the driver
+            // instead of racing CloseDevice, which is the case that frees memory
+            // out from under an in-flight command.
+            _camera = null;
+            _isoOptions = Array.Empty<PropertyValueOption>();
+            _softCancelRequested = false;
+
+            if (camera != null) {
                 try {
-                    SonyDriver.GetInstance().CloseCamera(_camera.Handle);
+                    SonyDriver.GetInstance().CloseCamera(camera.Handle);
                 } catch (Exception ex) {
                     Logger.Error(ex);
                 }
-
-                _camera = null;
-                NotifyGainPropertiesChanged();
             }
+
+            NotifyGainPropertiesChanged();
+            RaisePropertyChanged(nameof(Connected));
         }
 
         public Task<IExposureData> DownloadLiveView(CancellationToken token) {
             return Task.Run<IExposureData>(() => {
-                using (var memStream = new MemoryStream(SonyDriver.GetInstance().GetLiveView(_camera.Handle))) {
+                var camera = _camera;
+
+                if (camera == null) {
+                    throw new SonyException("Cannot download a live view frame: the camera is disconnected.");
+                }
+
+                using (var memStream = new MemoryStream(SonyDriver.GetInstance().GetLiveView(camera.Handle))) {
                     memStream.Position = 0;
 
                     JpegBitmapDecoder decoder =
@@ -602,12 +710,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public void StartExposure(CaptureSequence sequence) {
-            if (_camera != null) {
+            var camera = _camera;
+
+            if (camera != null) {
                 SonyDriver driver = SonyDriver.GetInstance();
 
                 double exposureTime;
                 lock (_captureLock) {
                     _softCancelRequested = false;
+                    _lastCaptureProducedImage = false;
                     if (!TryGetCaptureStatus(driver, out var captureStatus, "start exposure preflight") ||
                         captureStatus == CAPTURE_STATUS_UNKNOWN) {
                         Logger.Warning("Cannot start exposure: capture status unavailable.");
@@ -634,7 +745,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 // Start capture outside the capture lock to avoid blocking abort/cancel paths if the call hangs.
-                driver.StartCapture(_camera.Handle, (float)exposureTime);
+                driver.StartCapture(camera.Handle, (float)exposureTime);
             }
         }
 
@@ -677,6 +788,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     }
 
                     Logger.Info($"Wait for image ready complete; completion state is {captureStatus}.");
+
+                    // The driver only refreshes its image buffer on a COMPLETE
+                    // status. Remember whether this capture actually produced a
+                    // frame so DownloadExposure cannot hand NINA the previous
+                    // one after a cancelled or failed exposure.
+                    _lastCaptureProducedImage = captureStatus == CAPTURE_COMPLETE;
+
                     if (_softCancelRequested || token.IsCancellationRequested) {
                         _softCancelRequested = false;
                         throw new TaskCanceledException("Exposure cancelled by user (soft cancel).");
@@ -693,7 +811,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public Task<IExposureData> DownloadExposure(CancellationToken token) {
             return Task.Run<IExposureData>(() => {
+                if (!_lastCaptureProducedImage) {
+                    throw new SonyException("The last exposure did not complete, so there is no image to download.");
+                }
+
                 byte[] rawImageData = SonyDriver.GetInstance().GetLastImage();
+
+                if (rawImageData == null || rawImageData.Length == 0) {
+                    throw new SonyException("The driver returned no image data for the last exposure.");
+                }
 
                 var metaData = new ImageMetaData();
 
