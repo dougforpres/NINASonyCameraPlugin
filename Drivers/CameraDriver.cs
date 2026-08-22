@@ -30,6 +30,17 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private const uint PROPID_ISO = 0xD21E; // Actual ISO currently set
         private const uint PROPID_ISOS = 0xFFFE; // Registry-backed list of learnt ISOs (may be empty until learnt)
 
+        // The camera's "let me choose the ISO" setting. Not offered as a gain:
+        // with it selected the camera picks a different sensitivity per frame,
+        // so measured signal stops being a function of exposure time. That
+        // breaks flat and sky-flat exposure searches (NINA reports "camera
+        // response determined to be non-linear") and makes lights uncalibratable.
+        private const uint ISO_AUTO = 0x00FFFFFF;
+
+        // Values at or above this are the camera's Multi Frame NR ISOs, which
+        // are composites rather than single exposures.
+        private const uint ISO_MULTI_FRAME_NR_FLOOR = 0x01000000;
+
         // Capture Status
         private const uint CAPTURE_CREATED    = 0x0000;
         private const uint CAPTURE_CAPTURING  = 0x0001;
@@ -59,14 +70,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // NINA's poll path.
         private IReadOnlyList<PropertyValueOption> _isoOptions = Array.Empty<PropertyValueOption>();
 
-        // The ISO options as NINA sees them (AUTO presented as 0). Single source
-        // of truth for Gains, GainMin and GainMax so they cannot disagree.
+        // The ISO options as NINA sees them. Single source of truth for Gains,
+        // GainMin and GainMax so they cannot disagree.
         private IList<int> _gains = Array.Empty<int>();
 
         // Last values successfully read from the camera, reported when a poll
         // read is skipped or fails so the UI does not flap.
         private int _lastKnownGain = -1;
         private int _lastKnownBatteryLevel = 0;
+        private bool _warnedAboutAutoIso;
 
         private SonyCameraInfo _camera = null;
         private SonyDevice _device = null;
@@ -133,7 +145,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
             foreach (var propertyId in propertyCandidates) {
                 try {
-                    var options = _camera.GetPropertyInfo(propertyId)?.Options()?.Where(o => o.Value <= 0x00FFFFFF).ToList();
+                    var options = _camera.GetPropertyInfo(propertyId)?.Options()
+                        ?.Where(o => o.Value != ISO_AUTO && o.Value < ISO_MULTI_FRAME_NR_FLOOR)
+                        .ToList();
                     if (options != null && options.Count > 0) {
                         return options;
                     }
@@ -152,14 +166,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         /// <summary>
         /// Maps the camera's ISO options to the gain values NINA works with.
-        /// AUTO (0xffffff) is presented as 0, matching what the Gain getter
-        /// reports back.
+        /// AUTO is already excluded by <see cref="ReadIsoOptions"/>, so these
+        /// are all real ISO numbers.
         /// </summary>
         private static IList<int> ToGains(IReadOnlyList<PropertyValueOption> isoOptions) {
             List<int> gains = new List<int>();
 
             foreach (var iso in isoOptions) {
-                gains.Add(iso.Value == 0xffffff ? 0 : (int)iso.Value);
+                gains.Add((int)iso.Value);
             }
 
             return gains;
@@ -441,13 +455,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         // GainMin/GainMax are derived from the same list Gains exposes, so the
         // range can never exclude a value the dropdown offers. They used to be
-        // taken from the raw ISO options instead: AUTO is 0xffffff there but is
-        // presented to NINA as 0, so the reported minimum was the lowest real
-        // ISO and picking AUTO failed validation with "Gain has to be set
-        // between 50 and 128000 but is set to 0" - which aborted the flat
-        // wizard before it took a single frame. GainMax had the mirror-image
-        // problem: it used Last() rather than the maximum, so a list with AUTO
-        // at the end reported 16777215.
+        // taken from the raw ISO options instead, which disagreed with the
+        // mapped list and made the advertised range exclude a value the
+        // dropdown offered - that aborted the flat wizard before it took a
+        // single frame. GainMax had the mirror-image problem: it used Last()
+        // rather than the maximum.
 
         public int GainMax => _gains.Count > 0 ? _gains.Max() : -1;
 
@@ -460,7 +472,21 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 if (TryReadPolledProperty(PROPID_ISO, out uint iso)) {
-                    _lastKnownGain = (int)(iso == 0xffffff ? 0 : iso);
+                    if (iso == ISO_AUTO) {
+                        // The camera is on AUTO ISO. There is no gain number to
+                        // report, and no useful one to invent - say so once and
+                        // report it as unknown rather than guessing.
+                        if (!_warnedAboutAutoIso) {
+                            _warnedAboutAutoIso = true;
+                            Logger.Warning("The camera is set to AUTO ISO. Set a fixed ISO on the camera: on AUTO it chooses its own sensitivity per frame, so exposure searches and calibration will not work.");
+                            Notification.ShowWarning("Sony camera is on AUTO ISO. Set a fixed ISO on the camera for astro use.");
+                        }
+
+                        _lastKnownGain = -1;
+                    } else {
+                        _warnedAboutAutoIso = false;
+                        _lastKnownGain = (int)iso;
+                    }
                 }
 
                 return _lastKnownGain;
@@ -642,7 +668,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     _camera = SonyDriver.GetInstance().OpenCamera(_device.Id);
                     _isoOptions = ReadIsoOptions();
                     _gains = ToGains(_isoOptions);
-                    Logger.Info($"Sony camera gain range is {(_gains.Count > 0 ? $"{_gains.Min()}..{_gains.Max()} ({_gains.Count} values, {(_gains.Contains(0) ? "including" : "no")} AUTO)" : "unavailable")}.");
+                    Logger.Info($"Sony camera gain range is {(_gains.Count > 0 ? $"ISO {_gains.Min()}..{_gains.Max()} ({_gains.Count} values; AUTO and Multi Frame NR excluded)" : "unavailable")}.");
                     _lastKnownGain = -1;
                     _lastKnownBatteryLevel = 0;
                     _softCancelRequested = false;
