@@ -54,12 +54,6 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private readonly bool _enableNativeCancelDefault;
         private volatile bool _softCancelRequested;
 
-        // Set when a capture reaches CAPTURE_COMPLETE. The driver keeps the last
-        // downloaded frame in its own buffer and only replaces it on completion,
-        // so without this a cancelled or failed exposure would hand NINA the
-        // previous frame again.
-        private volatile bool _lastCaptureProducedImage;
-
         // Cached because the ISO option list comes from the property descriptors
         // read once at open time, and CanGetGain/Gains/GainMin/GainMax are all on
         // NINA's poll path.
@@ -743,7 +737,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 double exposureTime;
                 lock (_captureLock) {
                     _softCancelRequested = false;
-                    _lastCaptureProducedImage = false;
+
                     if (!TryGetCaptureStatus(driver, out var captureStatus, "start exposure preflight") ||
                         captureStatus == CAPTURE_STATUS_UNKNOWN) {
                         Logger.Warning("Cannot start exposure: capture status unavailable.");
@@ -767,6 +761,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     }
 
                     exposureTime = sequence.ExposureTime;
+
+                    // Drop anything left over from a previous capture, so a
+                    // failed exposure cannot be handed the old frame. This has
+                    // to come after the status reads above: a read that sees a
+                    // stale COMPLETE takes that frame as a side effect.
+                    driver.DiscardLastImage();
                 }
 
                 // Start capture outside the capture lock to avoid blocking abort/cancel paths if the call hangs.
@@ -825,12 +825,6 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                     Logger.Info($"[thread {Environment.CurrentManagedThreadId}] Wait for image ready complete; completion state is {DescribeCaptureStatus(captureStatus)}.");
 
-                    // The driver only refreshes its image buffer on a COMPLETE
-                    // status. Remember whether this capture actually produced a
-                    // frame so DownloadExposure cannot hand NINA the previous
-                    // one after a cancelled or failed exposure.
-                    _lastCaptureProducedImage = captureStatus == CAPTURE_COMPLETE;
-
                     if (_softCancelRequested || token.IsCancellationRequested) {
                         _softCancelRequested = false;
                         throw new TaskCanceledException("Exposure cancelled by user (soft cancel).");
@@ -847,20 +841,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public Task<IExposureData> DownloadExposure(CancellationToken token) {
             return Task.Run<IExposureData>(() => {
-                var camera = _camera;
-
-                if (camera == null) {
-                    throw new SonyException("Cannot download the exposure: the camera is disconnected.");
-                }
-
-                if (!_lastCaptureProducedImage) {
-                    throw new SonyException("The last exposure did not complete, so there is no image to download.");
-                }
-
-                byte[] rawImageData = SonyDriver.GetInstance().DownloadLastImage(camera.Handle);
+                // Whether there is a frame to hand over is the driver layer's
+                // knowledge, not something to infer from the status this class
+                // happened to observe: the frame is copied out by whichever call
+                // saw the capture complete, and taking it clears it, so a
+                // cancelled or failed exposure cannot be served the last one.
+                byte[] rawImageData = SonyDriver.GetInstance().TakeLastImage();
 
                 if (rawImageData == null || rawImageData.Length == 0) {
-                    throw new SonyException("The driver returned no image data for the last exposure.");
+                    throw new SonyException("The last exposure did not produce an image to download.");
                 }
 
                 var metaData = new ImageMetaData();

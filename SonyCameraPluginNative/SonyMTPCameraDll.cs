@@ -10,6 +10,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Sony {
@@ -43,6 +44,7 @@ namespace Sony {
         internal readonly int[] MINIMUM_DLL_VERSION = { 1, 0, 1, 17 };
 
         internal const UInt32 ERROR_SUCCESS = 0;
+        internal const UInt32 ERROR_NOT_SUPPORTED = 50;
         internal const UInt32 ERROR_RETRY = 1237;
         internal const UInt32 INVALID_HANDLE_VALUE = 0xffffffff;
 
@@ -60,6 +62,7 @@ namespace Sony {
 
         private IntPtr _dllHandle;
         private string _dllName = "SonyMTPCamera.dll";
+        private byte[] _lastImage = null;
 
 #pragma warning disable 0649
         private dGetSupportedDeviceCount fGetSupportedDeviceCount;
@@ -254,16 +257,25 @@ namespace Sony {
 
             // The result of this used to be discarded. When the camera refuses
             // the new shutter speed the capture then went ahead at whatever was
-            // set previously, which is what makes the flat wizard's search
-            // never converge: it thinks it changed the exposure, and the frames
-            // keep coming back at the old one.
+            // set previously, which is what makes the flat wizard's search never
+            // converge: it thinks it changed the exposure, and the frames keep
+            // coming back at the old one.
+            //
+            // ERROR_NOT_SUPPORTED is the exception. The driver returns it when
+            // the camera has no learnt exposure-time table, in which case it
+            // cannot drive the shutter speed at all and the exposure set on the
+            // body is used as-is. That has always been how those cameras work,
+            // so warn rather than break them.
+            //
+            // valueOut is not populated by the driver, so there is nothing
+            // useful to read back from it.
             uint hr = fSetExposureTime(hDevice, exposureTime, ref value);
 
-            if (hr != ERROR_SUCCESS) {
+            if (hr == ERROR_NOT_SUPPORTED) {
+                Logger.Warning($"The driver cannot set the exposure time on this camera (no learnt exposure-time list), so {exposureTime}s was not applied - the camera's own shutter speed will be used. Run SonyCameraInfo with the camera connected to learn its exposure times.");
+            } else if (hr != ERROR_SUCCESS) {
                 throw new SonyException($"Unable to set exposure time to {exposureTime}s, error {hr}");
             }
-
-            Logger.Debug($"Exposure time set to {exposureTime}s; camera reports '{value.Text}' (0x{value.Value:x})");
 
             ImageInfo info = new ImageInfo {
                 ImageMode = IMAGEMODE_PASSTHRU,
@@ -283,6 +295,30 @@ namespace Sony {
             fCancelCapture(hDevice, ref Info);
         }
 
+        /// <summary>
+        /// Reads the capture status, and takes the finished frame with it.
+        /// <para>
+        /// The copy has to happen here and cannot be deferred to download time.
+        /// The driver's GetCaptureStatus is a one-shot for a completed capture:
+        /// the first call that reports STATUS_COMPLETE fetches the image and
+        /// then resets its own status to STATUS_CANCELLED, so a second call
+        /// returns 3 and the frame is gone. From the driver log:
+        /// </para>
+        /// <code>
+        /// 16:52:34.083 Set capture status to: 4
+        /// 16:52:34.145 Camera::GetCaptureStatus() - Capture Complete
+        /// 16:52:34.164 In:: Image::GetImageData
+        /// 16:52:34.171 Set capture status to: 3
+        /// 16:52:34.177 Camera::GetCaptureStatus() - Capture Cancelled
+        /// </code>
+        /// <para>
+        /// That also means only one caller can ever observe the completed
+        /// state, so the frame is copied exactly once per capture regardless.
+        /// A fresh array each time is deliberate: NINA saves the previous frame
+        /// asynchronously, so reusing one buffer would let the next capture
+        /// overwrite an image still being written to disk.
+        /// </para>
+        /// </summary>
         public UInt32 GetCaptureStatus(UInt32 hDevice) {
             ImageInfo info = new ImageInfo();
 
@@ -290,46 +326,32 @@ namespace Sony {
                 throw new SonyException("Unable to get image status");
             }
 
+            if (info.Status == STATUS_COMPLETE && info.ImageData != IntPtr.Zero && info.ImageSize > 0) {
+                byte[] image = new byte[info.ImageSize];
+
+                Marshal.Copy(info.ImageData, image, 0, (Int32)info.ImageSize);
+
+                _lastImage = image;
+            }
+
             return info.Status;
         }
 
         /// <summary>
-        /// Copies the completed frame out of the driver's buffer.
-        /// <para>
-        /// This used to happen inside <see cref="GetCaptureStatus"/>, on any
-        /// read that saw STATUS_COMPLETE. Status is polled every 100ms during a
-        /// capture and read again during the next exposure's preflight, so the
-        /// same frame was copied more than once - and each copy is a fresh ~25MB
-        /// array on the large object heap, which is never compacted. Doing it
-        /// once, when NINA actually asks to download, is one allocation per
-        /// frame instead of several.
-        /// </para>
-        /// <para>
-        /// A fresh array each time is deliberate: NINA saves the previous frame
-        /// asynchronously, so reusing one buffer would let a new capture
-        /// overwrite an image still being written to disk.
-        /// </para>
+        /// Hands over the frame taken by the last <see cref="GetCaptureStatus"/>
+        /// that saw a completed capture, and forgets it. Nulling it here is what
+        /// stops a cancelled or failed exposure from being served the previous
+        /// frame a second time.
         /// </summary>
-        public byte[] DownloadLastImage(UInt32 hDevice) {
-            ImageInfo info = new ImageInfo();
+        internal byte[] TakeLastImage() {
+            // Interlocked because the copy is written by whichever thread polled
+            // the capture status, and read by NINA's download task.
+            return Interlocked.Exchange(ref _lastImage, null);
+        }
 
-            if (fGetCaptureStatus(hDevice, ref info) != ERROR_SUCCESS) {
-                throw new SonyException("Unable to get image status");
-            }
-
-            if (info.Status != STATUS_COMPLETE) {
-                throw new SonyException($"There is no completed image to download (capture status is {info.Status})");
-            }
-
-            if (info.ImageData == IntPtr.Zero || info.ImageSize == 0) {
-                throw new SonyException("The driver reported a completed capture but returned no image data");
-            }
-
-            byte[] image = new byte[info.ImageSize];
-
-            Marshal.Copy(info.ImageData, image, 0, (Int32)info.ImageSize);
-
-            return image;
+        /// <summary>Drops any frame left over from a previous capture.</summary>
+        internal void DiscardLastImage() {
+            Interlocked.Exchange(ref _lastImage, null);
         }
 
         public CameraInfo GetCameraInfo(UInt32 hDevice, UInt32 Flags) {

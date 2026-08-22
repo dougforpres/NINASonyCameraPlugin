@@ -407,6 +407,12 @@ namespace Sony
             return Invoke(handle, "get live view frame", () => _sonydll.GetPreviewImage(handle));
         }
 
+        /// <summary>
+        /// Reads the capture status. On the one call that observes a completed
+        /// capture this also copies the frame out of the driver's buffer, which
+        /// is why it has to hold the lock: that buffer is freed by CancelCapture
+        /// and CloseDevice.
+        /// </summary>
         public uint GetCaptureStatus(uint handle) {
             return Invoke(handle, "read capture status", () => _sonydll.GetCaptureStatus(handle));
         }
@@ -420,12 +426,22 @@ namespace Sony
         }
 
         /// <summary>
-        /// Copies the completed frame out of the driver. Runs under the lock so
-        /// it cannot overlap a cancel or a close, which is what frees the buffer
-        /// being read.
+        /// Hands over the frame that <see cref="GetCaptureStatus"/> took when it
+        /// saw the capture complete, and forgets it. Purely managed - the copy
+        /// out of the driver already happened - so no watchdog is needed.
         /// </summary>
-        public byte[] DownloadLastImage(uint handle) {
-            return Invoke(handle, "download the last image", () => _sonydll.DownloadLastImage(handle));
+        /// <remarks>
+        /// Deliberately does not take the native lock: it touches nothing but a
+        /// managed field, and taking the lock would let a wedged driver call
+        /// block the download of a frame that has already been copied out.
+        /// </remarks>
+        public byte[] TakeLastImage() {
+            return _sonydll.TakeLastImage();
+        }
+
+        /// <summary>Drops any frame left over from a previous capture.</summary>
+        public void DiscardLastImage() {
+            _sonydll.DiscardLastImage();
         }
 
         public IEnumerable<SonyLens> Lenses() {

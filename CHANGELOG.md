@@ -14,9 +14,11 @@ No call into the driver can hang NINA any more:
 - When the watchdog fires the camera is reported disconnected and no further calls are made, so the sequence fails visibly and keeps going instead of going silent. The stuck thread cannot be recovered; NINA has to be restarted before the camera can be used again, and the log and the error message both say so.
 - Disconnecting no longer waits behind a stuck call: it gives up after 5s and cleans up locally rather than freezing the UI.
 
-Memory:
+Image download:
 
-- The completed frame is copied out of the driver once, when NINA downloads it, instead of on every capture-status read that happened to see "complete". Status is polled at 10Hz during a capture and read again during the next exposure's preflight, so the same ~25MB frame was being copied to a fresh large-object-heap array several times per exposure.
+- `GetCaptureStatus` is a one-shot for a completed capture: the first call that reports `COMPLETE` fetches the frame from the camera and then resets the driver's own status to `CANCELLED`, so a second call returns 3 and the frame is gone. The copy therefore has to happen on that call and cannot be deferred. This is now documented in the code with the driver-log evidence, so it does not get "optimised" away again.
+- Taking the frame clears it, so a cancelled or failed exposure can no longer be handed the previously downloaded image. Anything left over from an earlier capture is dropped when a new exposure starts.
+- Setting the exposure time is checked, but `ERROR_NOT_SUPPORTED` is treated as a warning rather than a failure: the driver returns it for bodies with no learnt exposure-time list, where the shutter speed set on the camera has always been used as-is.
 
 Driver access is now serialized end to end:
 
