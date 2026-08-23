@@ -134,6 +134,25 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
             }
         }
 
+        /// <summary>
+        /// Off by default. Watching for the camera leaving the USB bus lets the
+        /// plugin stop talking to the driver within milliseconds and reopen the
+        /// camera when it returns - but it is unproven, and on one machine a
+        /// build carrying it failed to open the camera twice where the same
+        /// build without it succeeded. The driver registers its own WPD device
+        /// notification, and the two may contend. Opt in deliberately.
+        /// </summary>
+        public bool EnableUsbDisconnectDetection {
+            get {
+                var raw = pluginSettings.GetValueString(nameof(EnableUsbDisconnectDetection), bool.FalseString);
+                return bool.TryParse(raw, out var enabled) && enabled;
+            }
+            set {
+                pluginSettings.SetValueString(nameof(EnableUsbDisconnectDetection), value.ToString());
+                RaisePropertyChanged();
+            }
+        }
+
         public bool EnableNativeCancel {
             get {
                 var raw = pluginSettings.GetValueString(nameof(EnableNativeCancel), bool.FalseString);

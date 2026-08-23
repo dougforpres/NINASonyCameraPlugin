@@ -228,6 +228,23 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
+        private bool UsbDisconnectDetectionEnabled {
+            get {
+                if (_pluginSettings != null) {
+                    try {
+                        var raw = _pluginSettings.GetValueString(nameof(SonyCamera.EnableUsbDisconnectDetection), bool.FalseString);
+                        if (bool.TryParse(raw, out var enabled)) {
+                            return enabled;
+                        }
+                    } catch (Exception ex) {
+                        Logger.Warning($"EnableUsbDisconnectDetection read failed; leaving it off. {ex.Message}");
+                    }
+                }
+
+                return false;
+            }
+        }
+
         private bool TryCancelCaptureIfEnabled(string reason, int lockTimeoutMs = 1000) {
             var camera = _camera;
 
@@ -693,6 +710,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 driver.CameraRemoved += OnCameraRemoved;
                 driver.CameraReturned -= OnCameraReturned;
                 driver.CameraReturned += OnCameraReturned;
+
+                driver.WatchForDisconnects = UsbDisconnectDetectionEnabled;
 
                 try {
                     _camera = driver.OpenCamera(_device.Id);

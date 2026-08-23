@@ -124,6 +124,14 @@ namespace Sony
         private DeviceWatcher _deviceWatcher;
 
         /// <summary>
+        /// Whether to watch Windows for the camera leaving the USB bus. Off
+        /// unless the user turns it on: it is unproven, and a build carrying it
+        /// twice failed to open a camera that the same build without it opened
+        /// fine. Set before opening the camera.
+        /// </summary>
+        public bool WatchForDisconnects { get; set; }
+
+        /// <summary>
         /// The handle of a camera that Windows removed from us. The driver still
         /// has a device object for it that wants closing, but that cannot be
         /// done while the hardware is missing - it is closed on the way back in.
@@ -425,6 +433,11 @@ namespace Sony
         }
 
         private void StartWatching(string path) {
+            if (!WatchForDisconnects) {
+                Logger.Info("Sony: USB disconnect detection is off; a disconnect will only be noticed when a call to the camera fails.");
+                return;
+            }
+
             try {
                 DeviceWatcher previous = Interlocked.Exchange(ref _deviceWatcher, null);
                 previous?.Dispose();
