@@ -264,11 +264,20 @@ namespace Sony {
 
         /// <summary>
         /// Accept the applied shutter speed if it is within this factor of what
-        /// was asked for. Sony steps in third-stops (x1.26), so the nearest
-        /// achievable speed is never more than about 12% away; 1.25 leaves room
-        /// for that without accepting a speed that is a whole step out.
+        /// was asked for.
+        /// <para>
+        /// Sony steps in third-stops (x1.26), so a request landing exactly
+        /// between two steps is x1.122 from the nearer one - this has to be a
+        /// little above that, and no more. It was x1.25 to begin with, which is
+        /// nearly a whole step: requests that should have moved the shutter were
+        /// accepted as already-good, so several consecutive frames in an
+        /// exposure search were taken at an identical speed. NINA reads that as
+        /// "changed the exposure, signal did not move", reports the camera
+        /// response as non-linear and stops converging - the very thing this
+        /// code exists to prevent.
+        /// </para>
         /// </summary>
-        private const double EXPOSURE_MATCH_TOLERANCE = 1.25;
+        private const double EXPOSURE_MATCH_TOLERANCE = 1.13;
 
         /// <summary>
         /// Decodes a shutter-speed property value into seconds. The value packs
@@ -367,6 +376,7 @@ namespace Sony {
             double previous = actual;
             int attempts = 0;
             int withoutProgress = 0;
+            bool everMoved = false;
 
             while (elapsed.ElapsedMilliseconds < EXPOSURE_SETTLE_TIMEOUT_MS) {
                 attempts++;
@@ -399,12 +409,21 @@ namespace Sony {
 
                     Thread.Sleep(300);
                 } else {
+                    everMoved = true;
                     withoutProgress = 0;
                     previous = actual;
                 }
             }
 
-            Logger.Error($"Exposure time was not applied: asked for {exposureTime}s but the camera is still at {actual}s after {attempts} attempt(s) over {elapsed.ElapsedMilliseconds}ms. This frame will be exposed at {actual}s, not {exposureTime}s.");
+            if (everMoved) {
+                // The camera moved and then settled, so this is as close as its
+                // shutter steps allow. Not a failure - but say what will
+                // actually be exposed, because it is not what was asked for.
+                Logger.Info($"Exposure time {exposureTime}s is not available on this camera; the closest it can do is {actual}s, which is what this frame will be exposed at.");
+                return;
+            }
+
+            Logger.Error($"Exposure time was not applied: asked for {exposureTime}s but the camera never moved off {actual}s after {attempts} attempt(s) over {elapsed.ElapsedMilliseconds}ms. This frame will be exposed at {actual}s, not {exposureTime}s.");
         }
 
         public UInt32 StartCapture(UInt32 hDevice, float exposureTime) {
