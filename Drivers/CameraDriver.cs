@@ -61,6 +61,16 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // than that, and stalling the timer behind it just makes NINA complain.
         private const int POLL_READ_TIMEOUT_MS = 500;
 
+        // How long to let Windows and the MTP stack settle after the camera
+        // reappears before trying to open it. Reopening the instant the
+        // interface arrives tends to fail - the device is enumerated before it
+        // is ready to answer.
+        private const int RECONNECT_SETTLE_MS = 2500;
+
+        // Reconnect attempts after the camera returns, and the gap between them.
+        private const int RECONNECT_ATTEMPTS = 3;
+        private const int RECONNECT_RETRY_DELAY_MS = 3000;
+
         private readonly PluginOptionsAccessor _pluginSettings;
         private readonly bool _enableNativeCancelDefault;
         private volatile bool _softCancelRequested;
@@ -79,6 +89,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private int _lastKnownGain = -1;
         private int _lastKnownBatteryLevel = 0;
         private bool _warnedAboutAutoIso;
+
+        // True between a successful Connect and a deliberate Disconnect. Tells
+        // the reconnect logic whether the camera coming back on USB is something
+        // to act on, or whether the user closed it on purpose.
+        private volatile bool _wantConnected;
+
+        // Guards against two reconnect attempts overlapping if the device
+        // bounces on and off the bus in quick succession.
+        private int _reconnectInProgress;
 
         private SonyCameraInfo _camera = null;
         private SonyDevice _device = null;
@@ -668,14 +687,17 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public Task<bool> Connect(CancellationToken token) {
             return Task.Run<bool>(() => {
+                var driver = SonyDriver.GetInstance();
+
+                driver.CameraRemoved -= OnCameraRemoved;
+                driver.CameraRemoved += OnCameraRemoved;
+                driver.CameraReturned -= OnCameraReturned;
+                driver.CameraReturned += OnCameraReturned;
+
                 try {
-                    _camera = SonyDriver.GetInstance().OpenCamera(_device.Id);
-                    _isoOptions = ReadIsoOptions();
-                    _gains = ToGains(_isoOptions);
-                    Logger.Info($"Sony camera gain range is {(_gains.Count > 0 ? $"ISO {_gains.Min()}..{_gains.Max()} ({_gains.Count} values; AUTO and Multi Frame NR excluded)" : "unavailable")}.");
-                    _lastKnownGain = -1;
-                    _lastKnownBatteryLevel = 0;
-                    _softCancelRequested = false;
+                    _camera = driver.OpenCamera(_device.Id);
+                    AdoptOpenCamera();
+                    _wantConnected = true;
                 } catch (Exception ex) {
                     Logger.Error(ex);
                     _camera = null;
@@ -689,8 +711,94 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             });
         }
 
+        /// <summary>Settles the per-connection state after a camera has been opened.</summary>
+        private void AdoptOpenCamera() {
+            _isoOptions = ReadIsoOptions();
+            _gains = ToGains(_isoOptions);
+            Logger.Info($"Sony camera gain range is {(_gains.Count > 0 ? $"ISO {_gains.Min()}..{_gains.Max()} ({_gains.Count} values; AUTO and Multi Frame NR excluded)" : "unavailable")}.");
+            _lastKnownGain = -1;
+            _lastKnownBatteryLevel = 0;
+            _softCancelRequested = false;
+            _warnedAboutAutoIso = false;
+        }
+
+        /// <summary>
+        /// Windows has told us the camera left the bus. The driver has already
+        /// shut the door on further calls; this just makes NINA aware, so it
+        /// stops driving a camera that is not there.
+        /// </summary>
+        private void OnCameraRemoved() {
+            _camera = null;
+            _isoOptions = Array.Empty<PropertyValueOption>();
+            _gains = Array.Empty<int>();
+
+            Notification.ShowWarning("Sony camera dropped off USB. Waiting for it to come back.");
+
+            NotifyGainPropertiesChanged();
+            RaisePropertyChanged(nameof(Connected));
+        }
+
+        /// <summary>
+        /// The camera is back on the bus. If it was connected when it vanished,
+        /// reopen it so a sequence can carry on rather than the whole session
+        /// ending because a cable was nudged.
+        /// </summary>
+        private void OnCameraReturned() {
+            if (!_wantConnected) {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref _reconnectInProgress, 1, 0) != 0) {
+                Logger.Debug("Sony: a reconnect is already running; ignoring this arrival.");
+                return;
+            }
+
+            Task.Run(async () => {
+                try {
+                    for (int attempt = 1; attempt <= RECONNECT_ATTEMPTS; attempt++) {
+                        // The interface is announced before the device is ready
+                        // to answer, so give the MTP stack a moment.
+                        await Task.Delay(attempt == 1 ? RECONNECT_SETTLE_MS : RECONNECT_RETRY_DELAY_MS);
+
+                        if (!_wantConnected) {
+                            return;
+                        }
+
+                        try {
+                            _camera = SonyDriver.GetInstance().ReopenAfterReturn();
+                            AdoptOpenCamera();
+
+                            Logger.Info($"Sony camera reconnected after {attempt} attempt(s).");
+                            Notification.ShowSuccess("Sony camera reconnected.");
+
+                            NotifyGainPropertiesChanged();
+                            RaisePropertyChanged(nameof(Connected));
+                            return;
+                        } catch (Exception ex) {
+                            Logger.Warning($"Sony: reconnect attempt {attempt} of {RECONNECT_ATTEMPTS} failed: {ex.Message}");
+                        }
+                    }
+
+                    Logger.Error($"Sony: could not reopen the camera after {RECONNECT_ATTEMPTS} attempts. Reconnect it in NINA.");
+                    Notification.ShowError("Sony camera came back but could not be reopened. Reconnect it in NINA.");
+                } finally {
+                    Interlocked.Exchange(ref _reconnectInProgress, 0);
+                }
+            });
+        }
+
         public void Disconnect() {
             var camera = _camera;
+
+            _wantConnected = false;
+
+            var driver = SonyDriver.GetInstance();
+            driver.CameraRemoved -= OnCameraRemoved;
+            driver.CameraReturned -= OnCameraReturned;
+
+            // Unconditionally, because after a removal there is no handle left
+            // to close and CloseCamera below will not run.
+            driver.AbandonReconnect();
 
             // Clear our handle first. Anything still polling (NINA's device
             // update timer, a capture wait loop) then stops calling the driver

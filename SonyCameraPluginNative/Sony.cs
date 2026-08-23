@@ -109,6 +109,24 @@ namespace Sony
         /// </summary>
         private readonly HashSet<uint> _propertiesKnownGood = new HashSet<uint>();
 
+        private DeviceWatcher _deviceWatcher;
+
+        /// <summary>
+        /// The handle of a camera that Windows removed from us. The driver still
+        /// has a device object for it that wants closing, but that cannot be
+        /// done while the hardware is missing - it is closed on the way back in.
+        /// </summary>
+        private uint _handleAwaitingClose = 0;
+
+        /// <summary>The device path of the camera we last opened, so it can be reopened.</summary>
+        private string _openPath = null;
+
+        /// <summary>Raised when Windows reports the open camera has left the USB bus.</summary>
+        public event Action CameraRemoved;
+
+        /// <summary>Raised when Windows reports it has come back.</summary>
+        public event Action CameraReturned;
+
         public static SonyDriver GetInstance() {
             return _instance.Value;
         }
@@ -368,12 +386,118 @@ namespace Sony
                 _cameraLost = false;
                 _consecutiveFailures = 0;
                 _propertiesKnownGood.Clear();
+                _handleAwaitingClose = 0;
+                _openPath = path;
+
+                _deviceWatcher?.Dispose();
+                _deviceWatcher = DeviceWatcher.TryStart(path, OnDeviceRemovedByOs, OnDeviceReturnedByOs);
 
                 return _camera;
             }, OPEN_CAMERA_TIMEOUT_MS);
         }
 
+        /// <summary>
+        /// Windows says the camera has left the bus. Called on a system thread,
+        /// possibly while another thread is inside the driver.
+        /// <para>
+        /// Deliberately takes no lock and calls nothing native. The fields it
+        /// writes are volatile, and the point is to shut the door in the same
+        /// millisecond: from here on EnsureUsable refuses everything, so no
+        /// thread can hand the driver a device that is not there. Closing the
+        /// device is left until it comes back - calling into the driver about
+        /// hardware that has just vanished is the thing being avoided.
+        /// </para>
+        /// </summary>
+        private void OnDeviceRemovedByOs() {
+            if (!_cameraOpen) {
+                return;
+            }
+
+            _handleAwaitingClose = _openHandle;
+            _cameraOpen = false;
+            _cameraLost = true;
+            _camera = null;
+
+            Logger.Warning($"Sony: camera handle {_handleAwaitingClose:x} dropped off USB; no further calls will be made to the driver until it returns.");
+
+            try {
+                CameraRemoved?.Invoke();
+            } catch (Exception ex) {
+                Logger.Error("Sony: CameraRemoved handler failed.", ex);
+            }
+        }
+
+        /// <summary>
+        /// Gives up on the camera coming back, and stops watching for it. Called
+        /// when the user disconnects, including after the device has already
+        /// vanished - in which case there is no handle left to close and this is
+        /// the only thing that tears the watch down.
+        /// </summary>
+        public void AbandonReconnect() {
+            StopWatching();
+        }
+
+        /// <summary>
+        /// Stops watching for this device. Safe to call from any thread and more
+        /// than once.
+        /// </summary>
+        private void StopWatching() {
+            DeviceWatcher watcher = Interlocked.Exchange(ref _deviceWatcher, null);
+
+            _openPath = null;
+            watcher?.Dispose();
+        }
+
+        private void OnDeviceReturnedByOs() {
+            try {
+                CameraReturned?.Invoke();
+            } catch (Exception ex) {
+                Logger.Error("Sony: CameraReturned handler failed.", ex);
+            }
+        }
+
+        /// <summary>
+        /// Reopens the camera after Windows has put it back on the bus. Tidies
+        /// away the device object left behind by the removal first, since the
+        /// driver will not hand out a second one otherwise.
+        /// </summary>
+        public SonyCameraInfo ReopenAfterReturn() {
+            string path = _openPath;
+
+            if (string.IsNullOrEmpty(path)) {
+                throw new SonyException("Cannot reopen the camera: it was never opened.");
+            }
+
+            uint stale = _handleAwaitingClose;
+
+            if (stale != 0) {
+                _handleAwaitingClose = 0;
+
+                try {
+                    InvokeUnhandled($"close the handle {stale:x} left behind by the disconnect", () => {
+                        _sonydll.CloseDevice(stale);
+                        return true;
+                    }, CLOSE_CAMERA_LOCK_TIMEOUT_MS);
+                } catch (Exception ex) {
+                    // Expected to fail sometimes - the device it refers to was
+                    // pulled. Worth trying, not worth stopping for.
+                    Logger.Warning($"Sony: could not close the handle left behind by the disconnect: {ex.Message}");
+                }
+            }
+
+            // Clear the lost flag only now, so nothing slips a call in while the
+            // stale handle is being tidied up.
+            _cameraLost = false;
+
+            return OpenCamera(path);
+        }
+
         public void CloseCamera(uint handle) {
+            // Whatever else happens below, this is a deliberate disconnect, so
+            // stop watching for the device coming back - otherwise a later
+            // re-enumeration would try to reopen a camera the user closed.
+            StopWatching();
+
             // Disconnecting is the user's escape hatch, so it must not wait on
             // whatever else is in the driver. If we cannot get in quickly we
             // forget the handle locally and leave the device open rather than
@@ -422,6 +546,7 @@ namespace Sony
             _cameraLost = false;
             _consecutiveFailures = 0;
             _propertiesKnownGood.Clear();
+            _handleAwaitingClose = 0;
 
             _sonydll.CloseDevice(handle);
         }

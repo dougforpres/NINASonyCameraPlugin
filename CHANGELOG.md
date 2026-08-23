@@ -2,6 +2,15 @@
 
 ## 1.0.0.5
 
+Surviving a camera that drops off USB:
+
+- The plugin now subscribes to Windows device notifications, so it learns the camera has gone within milliseconds rather than waiting for the next call to fail. Until now the only way to notice was to hand the driver a device that was no longer there and see what happened - and while the camera sits idle the next call can be two seconds away. From the moment Windows says the device is gone, every call into the driver is refused.
+- When the camera comes back on the same USB id, the plugin closes the handle left behind and reopens it, up to three times. A nudged cable no longer has to end the session. Nothing is reopened if the user disconnected on purpose.
+- A property that has previously been read successfully now counts towards the disconnect guard when it starts failing; one that has never worked still does not. Previously property reads were excluded outright, which meant an idle camera - where those polls are the only traffic - had nothing that could ever notice it had gone.
+- Those failures are logged at Warning rather than Debug, which NINA's default log level discards.
+
+None of this can catch an access violation raised inside the native driver; that kills the process before any managed code runs. It narrows the window rather than closing it.
+
 Exposure time actually reaching the camera (#5):
 
 - Shutter speed on these bodies is a Range property: the driver cannot assign it, only step the camera one click at a time. When a step has no effect - which is what happens when frames are taken back to back, because the camera ignores it for a moment after handing over the previous image - the driver gives up and starts the capture at the old speed anyway. Every frame of a flat wizard search was being exposed at whatever the first one used, so the measured ADU never moved and the search could not converge. By hand in the imaging tab it works, because there are pauses between frames.
