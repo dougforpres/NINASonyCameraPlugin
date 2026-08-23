@@ -76,7 +76,23 @@ namespace Sony
         /// because the camera is still holding a session from a previous run
         /// that ended badly, and only a power cycle clears that.
         /// </summary>
-        private const string RECOVERY_ADVICE = "Power-cycle the camera (off, unplug USB, plug back in, on) and restart NINA.";
+        private const string RECOVERY_ADVICE = "Power-cycle the camera (off, unplug USB, plug back in, on), then try connecting again.";
+
+        /// <summary>
+        /// How many times a wedged driver may be given another chance before
+        /// the session really is finished.
+        /// <para>
+        /// A wedge means a thread is stuck inside the DLL and cannot be
+        /// recovered, so refusing everything afterwards is the safe reading.
+        /// But it is too strict on its own: it left a user power-cycling the
+        /// camera three times over six hours while every attempt was refused by
+        /// a flag set at the first failure, with no way back except restarting
+        /// NINA - and nothing said so. A retry costs at most one more bounded
+        /// wait and one more stuck thread, which is a far better trade than an
+        /// evening.
+        /// </para>
+        /// </summary>
+        private const int MAX_WEDGE_RETRIES = 3;
 
         private readonly object _nativeLock = new object();
 
@@ -95,13 +111,42 @@ namespace Sony
         /// <summary>
         /// Set when a call into the driver failed to return within the watchdog
         /// timeout. That thread is still inside the native DLL and cannot be
-        /// recovered, so from this point nothing else is allowed in - the only
-        /// way back is restarting NINA. Note the camera then disappears from
-        /// NINA's equipment list entirely, because even enumeration goes
-        /// through the same DLL; that is why the user is told on screen rather
-        /// than left to work out why it vanished.
+        /// recovered, so nothing else is allowed in while it is set. Note the
+        /// camera then disappears from NINA's equipment list entirely, because
+        /// even enumeration goes through the same DLL - which is why the user
+        /// is told on screen, and why rescanning or reconnecting is allowed to
+        /// clear this a few times via <see cref="TryClearWedgeForRetry"/>.
         /// </summary>
         private volatile bool _driverWedged = false;
+
+        private int _wedgeRetriesUsed = 0;
+
+        /// <summary>Advice that reflects whether trying again is still worth it.</summary>
+        private string WedgedAdvice =>
+            _wedgeRetriesUsed >= MAX_WEDGE_RETRIES
+                ? $"{RECOVERY_ADVICE} This session has already retried {MAX_WEDGE_RETRIES} times, so restart NINA as well."
+                : RECOVERY_ADVICE;
+
+        /// <summary>
+        /// Gives a wedged driver another chance, if there are any left. Called
+        /// when the user does something that means "try again" - enumerating
+        /// the cameras or opening one - so a wedge earlier in the session does
+        /// not permanently lock them out of a camera they have since fixed.
+        /// </summary>
+        private void TryClearWedgeForRetry(string reason) {
+            if (!_driverWedged) {
+                return;
+            }
+
+            if (_wedgeRetriesUsed >= MAX_WEDGE_RETRIES) {
+                return;
+            }
+
+            _wedgeRetriesUsed++;
+            _driverWedged = false;
+
+            Logger.Warning($"Sony: the driver stopped responding earlier in this session, but trying again anyway ({reason}); attempt {_wedgeRetriesUsed} of {MAX_WEDGE_RETRIES}. The earlier stuck thread is still stuck and cannot be recovered - if this keeps failing, restart NINA.");
+        }
 
         private int _consecutiveFailures = 0;
 
@@ -281,7 +326,7 @@ namespace Sony
         /// <summary>Caller must hold <see cref="_nativeLock"/>.</summary>
         private void EnsureUsable(uint handle, string what) {
             if (_driverWedged) {
-                throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. {RECOVERY_ADVICE}");
+                throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. {WedgedAdvice}");
             }
 
             if (_cameraLost) {
@@ -345,6 +390,11 @@ namespace Sony
         }
 
         public IEnumerable<SonyDevice> Cameras() {
+            // Rescanning for equipment is the user saying "try again", and a
+            // camera that has silently vanished from the chooser is the symptom
+            // that makes a wedge look unrecoverable.
+            TryClearWedgeForRetry("rescanning for cameras");
+
             // Materialized rather than yielded: the caller must not be able to
             // hold the enumerator open across the lock.
             return InvokeUnhandled("enumerate cameras", () => {
@@ -370,7 +420,7 @@ namespace Sony
 
             try {
                 if (_driverWedged) {
-                    throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. {RECOVERY_ADVICE}");
+                    throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. {WedgedAdvice}");
                 }
 
                 return RunWithWatchdog(what, action, timeoutMs);
@@ -384,6 +434,8 @@ namespace Sony
         }
 
         public SonyCameraInfo OpenCamera(string path) {
+            TryClearWedgeForRetry("connecting to the camera");
+
             SonyCameraInfo opened = InvokeUnhandled($"open camera '{path}'", () => {
                 if (_cameraOpen) {
                     Logger.Warning($"Sony: a camera is already open (handle {_openHandle:x}); closing it before opening '{path}'.");
@@ -417,6 +469,10 @@ namespace Sony
                 _propertiesKnownGood.Clear();
                 _handleAwaitingClose = 0;
                 _openPath = path;
+
+                // The driver is demonstrably working again, so give the session
+                // its full retry budget back.
+                _wedgeRetriesUsed = 0;
 
                 return _camera;
             }, OPEN_CAMERA_TIMEOUT_MS);
