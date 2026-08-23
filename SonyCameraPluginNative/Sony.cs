@@ -376,7 +376,7 @@ namespace Sony
         }
 
         public SonyCameraInfo OpenCamera(string path) {
-            return InvokeUnhandled($"open camera '{path}'", () => {
+            SonyCameraInfo opened = InvokeUnhandled($"open camera '{path}'", () => {
                 if (_cameraOpen) {
                     Logger.Warning($"Sony: a camera is already open (handle {_openHandle:x}); closing it before opening '{path}'.");
                     CloseCameraInternal(_openHandle);
@@ -410,11 +410,37 @@ namespace Sony
                 _handleAwaitingClose = 0;
                 _openPath = path;
 
-                _deviceWatcher?.Dispose();
-                _deviceWatcher = DeviceWatcher.TryStart(path, OnDeviceRemovedByOs, OnDeviceReturnedByOs);
-
                 return _camera;
             }, OPEN_CAMERA_TIMEOUT_MS);
+
+            // Started afterwards, and on its own thread, so that watching for
+            // the device can never delay or fail a connect. It is a nicety; the
+            // camera works without it. Registering it inside the open made it
+            // impossible to tell from a log whether a stalled connect was the
+            // driver or the registration, which is a bad property for something
+            // that is not load-bearing.
+            Task.Run(() => StartWatching(path));
+
+            return opened;
+        }
+
+        private void StartWatching(string path) {
+            try {
+                DeviceWatcher previous = Interlocked.Exchange(ref _deviceWatcher, null);
+                previous?.Dispose();
+
+                DeviceWatcher watcher = DeviceWatcher.TryStart(path, OnDeviceRemovedByOs, OnDeviceReturnedByOs);
+
+                // Only keep it if the camera is still the one we opened - the
+                // user may have disconnected while this was starting.
+                if (_openPath == path) {
+                    Interlocked.Exchange(ref _deviceWatcher, watcher);
+                } else {
+                    watcher?.Dispose();
+                }
+            } catch (Exception ex) {
+                Logger.Warning($"Sony: could not start watching for device removal: {ex.Message}");
+            }
         }
 
         /// <summary>

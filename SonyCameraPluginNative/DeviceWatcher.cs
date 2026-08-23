@@ -74,6 +74,11 @@ namespace Sony {
                 // at the start of the union.
                 WPD_DEVICE_INTERFACE.ToByteArray().CopyTo(filter.Union, 0);
 
+                // Logged before the call, not just after it: if this ever does
+                // block, the log needs to say so plainly rather than leaving a
+                // silent gap that looks like something else stalled.
+                Logger.Debug($"Sony: registering for USB device notifications for '{deviceId}'.");
+
                 int result = CM_Register_Notification(ref filter, IntPtr.Zero, watcher._callback, out IntPtr registration);
 
                 if (result != CR_SUCCESS) {
