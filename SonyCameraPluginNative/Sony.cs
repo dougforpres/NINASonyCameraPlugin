@@ -93,6 +93,22 @@ namespace Sony
 
         private int _consecutiveFailures = 0;
 
+        /// <summary>
+        /// Property ids that have been read or written successfully at least
+        /// once on the open camera.
+        /// <para>
+        /// Individual property failures normally must not be taken as evidence
+        /// the camera has gone away - plenty of bodies advertise a property and
+        /// then refuse it, every single time. But a property that worked a
+        /// moment ago and now does not is a different matter, and while the
+        /// camera sits idle these polls are the only thing touching it, so
+        /// excluding them outright left nothing that could ever notice an idle
+        /// disconnect.
+        /// </para>
+        /// <para>Guarded by <see cref="_nativeLock"/>.</para>
+        /// </summary>
+        private readonly HashSet<uint> _propertiesKnownGood = new HashSet<uint>();
+
         public static SonyDriver GetInstance() {
             return _instance.Value;
         }
@@ -107,14 +123,14 @@ namespace Sony
         /// Runs <paramref name="action"/> with the native lock held, after
         /// confirming <paramref name="handle"/> is still the open one.
         /// </summary>
-        /// <param name="countsTowardsLoss">
-        /// Whether a failure here is evidence the camera itself has gone away.
-        /// True for the calls that talk to the device on every invocation
-        /// (capture, live view, focus). False for individual property reads and
-        /// writes: plenty of bodies advertise a property and then refuse it, and
-        /// that must not be mistaken for an unplugged camera.
+        /// <param name="propertyId">
+        /// Set for calls that touch a single camera property. A failure only
+        /// counts as evidence the camera has gone away once that property has
+        /// been seen working - see <see cref="_propertiesKnownGood"/>. Leave
+        /// null for calls that always talk to the device (capture, live view,
+        /// focus), where any failure counts.
         /// </param>
-        private T Invoke<T>(uint handle, string what, Func<T> action, bool countsTowardsLoss = true, int timeoutMs = NATIVE_CALL_TIMEOUT_MS) {
+        private T Invoke<T>(uint handle, string what, Func<T> action, uint? propertyId = null, int timeoutMs = NATIVE_CALL_TIMEOUT_MS) {
             if (!Monitor.TryEnter(_nativeLock, timeoutMs)) {
                 throw new SonyException($"Timed out after {timeoutMs / 1000}s waiting to {what}: another operation is still running inside the Sony driver.");
             }
@@ -122,9 +138,16 @@ namespace Sony
             try {
                 EnsureUsable(handle, what);
 
+                bool countsTowardsLoss = propertyId == null || _propertiesKnownGood.Contains(propertyId.Value);
+
                 try {
                     T result = RunWithWatchdog(what, action, timeoutMs);
                     _consecutiveFailures = 0;
+
+                    if (propertyId != null) {
+                        _propertiesKnownGood.Add(propertyId.Value);
+                    }
+
                     return result;
                 } catch (Exception ex) {
                     RecordFailure(what, ex, countsTowardsLoss);
@@ -135,8 +158,8 @@ namespace Sony
             }
         }
 
-        private void Invoke(uint handle, string what, Action action, bool countsTowardsLoss = true, int timeoutMs = NATIVE_CALL_TIMEOUT_MS) {
-            Invoke<bool>(handle, what, () => { action(); return true; }, countsTowardsLoss, timeoutMs);
+        private void Invoke(uint handle, string what, Action action, uint? propertyId = null, int timeoutMs = NATIVE_CALL_TIMEOUT_MS) {
+            Invoke<bool>(handle, what, () => { action(); return true; }, propertyId, timeoutMs);
         }
 
         /// <summary>
@@ -177,7 +200,7 @@ namespace Sony
         /// Returns false only when the lock could not be taken in time; a
         /// failing call still throws.
         /// </summary>
-        private bool TryInvoke<T>(uint handle, string what, int timeoutMs, Func<T> action, out T result, bool countsTowardsLoss = true) {
+        private bool TryInvoke<T>(uint handle, string what, int timeoutMs, Func<T> action, out T result, uint? propertyId = null) {
             result = default;
 
             if (!Monitor.TryEnter(_nativeLock, timeoutMs)) {
@@ -188,9 +211,16 @@ namespace Sony
             try {
                 EnsureUsable(handle, what);
 
+                bool countsTowardsLoss = propertyId == null || _propertiesKnownGood.Contains(propertyId.Value);
+
                 try {
                     result = RunWithWatchdog(what, action, NATIVE_CALL_TIMEOUT_MS);
                     _consecutiveFailures = 0;
+
+                    if (propertyId != null) {
+                        _propertiesKnownGood.Add(propertyId.Value);
+                    }
+
                     return true;
                 } catch (Exception ex) {
                     RecordFailure(what, ex, countsTowardsLoss);
@@ -337,6 +367,7 @@ namespace Sony
                 _cameraOpen = true;
                 _cameraLost = false;
                 _consecutiveFailures = 0;
+                _propertiesKnownGood.Clear();
 
                 return _camera;
             }, OPEN_CAMERA_TIMEOUT_MS);
@@ -390,12 +421,13 @@ namespace Sony
             _openHandle = 0;
             _cameraLost = false;
             _consecutiveFailures = 0;
+            _propertiesKnownGood.Clear();
 
             _sonydll.CloseDevice(handle);
         }
 
         public PropertyValue GetProperty(uint handle, uint propertyId) {
-            return Invoke(handle, $"read property 0x{propertyId:x}", () => _sonydll.GetSinglePropertyValue(handle, propertyId), countsTowardsLoss: false);
+            return Invoke(handle, $"read property 0x{propertyId:x}", () => _sonydll.GetSinglePropertyValue(handle, propertyId), propertyId: propertyId);
         }
 
         /// <summary>
@@ -403,11 +435,11 @@ namespace Sony
         /// timer (battery, gain). Returns false if the driver is busy.
         /// </summary>
         public bool TryGetProperty(uint handle, uint propertyId, int timeoutMs, out PropertyValue value) {
-            return TryInvoke(handle, $"read property 0x{propertyId:x}", timeoutMs, () => _sonydll.GetSinglePropertyValue(handle, propertyId), out value, countsTowardsLoss: false);
+            return TryInvoke(handle, $"read property 0x{propertyId:x}", timeoutMs, () => _sonydll.GetSinglePropertyValue(handle, propertyId), out value, propertyId: propertyId);
         }
 
         public void SetProperty(uint handle, uint propertyId, uint value) {
-            Invoke(handle, $"set property 0x{propertyId:x} to {value}", () => _sonydll.SetPropertyValue(handle, propertyId, value), countsTowardsLoss: false);
+            Invoke(handle, $"set property 0x{propertyId:x} to {value}", () => _sonydll.SetPropertyValue(handle, propertyId, value), propertyId: propertyId);
         }
 
         public byte[] GetLiveView(uint handle) {

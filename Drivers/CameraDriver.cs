@@ -124,7 +124,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     return true;
                 }
             } catch (Exception ex) {
-                Logger.Debug($"Polled read of property 0x{propertyId:X} failed: {ex.Message}");
+                // Warning, not Debug: NINA's default log level drops Debug, and
+                // while the camera is idle these polls are the only thing
+                // touching it - so this is the first sign that a camera has gone
+                // away, and it needs to be in the log by default.
+                Logger.Warning($"Polled read of property 0x{propertyId:X} failed: {ex.Message}");
             }
 
             return false;
