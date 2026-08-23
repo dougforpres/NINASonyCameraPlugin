@@ -1,4 +1,5 @@
 using NINA.Core.Utility;
+using NINA.Core.Utility.Notification;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -69,6 +70,14 @@ namespace Sony
         /// </summary>
         private const int CLOSE_CAMERA_LOCK_TIMEOUT_MS = 5000;
 
+        /// <summary>
+        /// What to tell the user when the driver has stopped responding.
+        /// Restarting NINA alone is often not enough: the driver usually hangs
+        /// because the camera is still holding a session from a previous run
+        /// that ended badly, and only a power cycle clears that.
+        /// </summary>
+        private const string RECOVERY_ADVICE = "Power-cycle the camera (off, unplug USB, plug back in, on) and restart NINA.";
+
         private readonly object _nativeLock = new object();
 
         private SonyMTPCameraDll _sonydll;
@@ -87,7 +96,10 @@ namespace Sony
         /// Set when a call into the driver failed to return within the watchdog
         /// timeout. That thread is still inside the native DLL and cannot be
         /// recovered, so from this point nothing else is allowed in - the only
-        /// way back is restarting NINA.
+        /// way back is restarting NINA. Note the camera then disappears from
+        /// NINA's equipment list entirely, because even enumeration goes
+        /// through the same DLL; that is why the user is told on screen rather
+        /// than left to work out why it vanished.
         /// </summary>
         private volatile bool _driverWedged = false;
 
@@ -201,9 +213,18 @@ namespace Sony
                 _cameraOpen = false;
                 _camera = null;
 
-                Logger.Error($"Sony: the driver did not return from '{what}' within {timeoutMs / 1000}s. That thread is stuck inside SonyMTPCamera.dll and cannot be recovered; no further calls will be made. Restart NINA to use the camera again.");
+                Logger.Error($"Sony: the driver did not return from '{what}' within {timeoutMs / 1000}s. That thread is stuck inside SonyMTPCamera.dll and cannot be recovered, so no further calls will be made and the camera will disappear from the equipment list. {RECOVERY_ADVICE}");
 
-                throw new SonyException($"The Sony driver stopped responding while trying to {what}. Restart NINA to recover the camera.");
+                // Say so on screen too. Without this the only symptom is the
+                // camera quietly vanishing from the chooser, which looks like
+                // the plugin has broken rather than the driver having hung.
+                try {
+                    Notification.ShowError($"Sony driver stopped responding while trying to {what}. {RECOVERY_ADVICE}");
+                } catch (Exception notifyEx) {
+                    Logger.Warning($"Sony: could not show the driver-wedged notification: {notifyEx.Message}");
+                }
+
+                throw new SonyException($"The Sony driver stopped responding while trying to {what}. {RECOVERY_ADVICE}");
             }
 
             // Unwraps to the original exception rather than an AggregateException.
@@ -252,7 +273,7 @@ namespace Sony
         /// <summary>Caller must hold <see cref="_nativeLock"/>.</summary>
         private void EnsureUsable(uint handle, string what) {
             if (_driverWedged) {
-                throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. Restart NINA to recover the camera.");
+                throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. {RECOVERY_ADVICE}");
             }
 
             if (_cameraLost) {
@@ -341,7 +362,7 @@ namespace Sony
 
             try {
                 if (_driverWedged) {
-                    throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. Restart NINA to recover the camera.");
+                    throw new SonyException($"Cannot {what}: the Sony driver stopped responding earlier in this session. {RECOVERY_ADVICE}");
                 }
 
                 return RunWithWatchdog(what, action, timeoutMs);
