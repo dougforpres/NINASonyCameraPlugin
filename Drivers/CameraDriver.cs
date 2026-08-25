@@ -71,6 +71,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private const int RECONNECT_ATTEMPTS = 3;
         private const int RECONNECT_RETRY_DELAY_MS = 3000;
 
+        // Consecutive start attempts refused with the same busy status, and
+        // nothing of ours running, before the status is treated as stuck and
+        // cleared. Two is enough to tell a stuck state from a capture that is
+        // genuinely still finishing, without making the user wait.
+        private const int STUCK_CAPTURE_REFUSALS = 2;
+
         private readonly PluginOptionsAccessor _pluginSettings;
         private readonly bool _enableNativeCancelDefault;
         private volatile bool _softCancelRequested;
@@ -89,6 +95,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private int _lastKnownGain = -1;
         private int _lastKnownBatteryLevel = 0;
         private bool _warnedAboutAutoIso;
+
+        // Tracks a start that keeps being refused with the same busy status, so
+        // a stuck capture can be told apart from one that is still finishing.
+        private uint _lastRefusedStatus = CAPTURE_STATUS_UNKNOWN;
+        private int _refusedStartCount;
 
         // True between a successful Connect and a deliberate Disconnect. Tells
         // the reconnect logic whether the camera coming back on USB is something
@@ -301,6 +312,69 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     Monitor.Exit(_captureLock);
                 }
             }
+        }
+
+        /// <summary>
+        /// Tries to clear a capture status that has stuck in a busy state with
+        /// no capture of ours running.
+        /// <para>
+        /// Before the cancel guard, every exposure began with an unconditional
+        /// CancelCapture whose stated purpose was to reset the status. Removing
+        /// it stopped the crashes, but also removed the only way out of a stuck
+        /// state: a camera that never finished a capture refused every start
+        /// from then on, and the user had to disconnect and reconnect. Observed
+        /// on a bias run that could not take a single frame until the camera was
+        /// reconnected.
+        /// </para>
+        /// <para>
+        /// So the cancel comes back, but only here: when the driver says busy,
+        /// nothing of ours is running, and the state has not moved for a while.
+        /// That is a last resort on a camera that is already stuck, not
+        /// something on the path of every exposure.
+        /// </para>
+        /// <para>Caller must hold <see cref="_captureLock"/>.</para>
+        /// </summary>
+        private bool TryRecoverStuckCapture(SonyDriver driver, ref uint captureStatus) {
+            var camera = _camera;
+
+            if (camera == null) {
+                return false;
+            }
+
+            // Only when the same busy status has persisted across attempts -
+            // a capture that is genuinely running gets left alone.
+            if (captureStatus != _lastRefusedStatus) {
+                _lastRefusedStatus = captureStatus;
+                _refusedStartCount = 1;
+
+                Logger.Warning($"Cannot start exposure yet: the camera reports {DescribeCaptureStatus(captureStatus)}. Waiting for it to finish.");
+
+                return false;
+            }
+
+            if (++_refusedStartCount < STUCK_CAPTURE_REFUSALS) {
+                Logger.Warning($"Camera still reports {DescribeCaptureStatus(captureStatus)} ({_refusedStartCount} of {STUCK_CAPTURE_REFUSALS} before trying to clear it).");
+
+                return false;
+            }
+
+            Logger.Warning($"Camera has reported {DescribeCaptureStatus(captureStatus)} for {_refusedStartCount} start attempts with nothing running. Issuing a cancel to clear it.");
+
+            try {
+                driver.CancelCapture(camera.Handle);
+            } catch (Exception ex) {
+                Logger.Error("Failed to clear the stuck capture.", ex);
+                return false;
+            }
+
+            _lastRefusedStatus = CAPTURE_STATUS_UNKNOWN;
+            _refusedStartCount = 0;
+
+            if (!TryGetCaptureStatus(driver, out captureStatus, "after clearing a stuck capture") || captureStatus == CAPTURE_STATUS_UNKNOWN) {
+                return false;
+            }
+
+            return !BUSY_STATES.Contains(captureStatus);
         }
 
         private static string DescribeCaptureStatus(uint status) {
@@ -739,6 +813,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             _lastKnownBatteryLevel = 0;
             _softCancelRequested = false;
             _warnedAboutAutoIso = false;
+            _lastRefusedStatus = CAPTURE_STATUS_UNKNOWN;
+            _refusedStartCount = 0;
         }
 
         /// <summary>
@@ -902,14 +978,27 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                         throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
                     }
 
+                    if (BUSY_STATES.Contains(captureStatus) && TryRecoverStuckCapture(driver, ref captureStatus)) {
+                        Logger.Info($"Capture status recovered to {DescribeCaptureStatus(captureStatus)}; continuing with the exposure.");
+                    }
+
                     if (BUSY_STATES.Contains(captureStatus)) {
-                        Notification.ShowWarning("Camera is still busy with a previous exposure; skipping new start.");
-                        throw new TaskCanceledException("Cannot start exposure: camera is still busy with a previous exposure.");
+                        // A real error, not a cancellation. Throwing
+                        // TaskCanceledException here is read by NINA as the user
+                        // cancelling, which unwinds the whole sequence: every
+                        // remaining exposure then aborts the instant it starts,
+                        // because WaitUntilExposureIsReady registers AbortExposure
+                        // on a token that is already cancelled. A 31-frame bias
+                        // run went by in under a tenth of a second that way, and
+                        // the log recorded it as having finished normally.
+                        Logger.Error($"Cannot start exposure: the camera is still busy with a previous one ({DescribeCaptureStatus(captureStatus)}) and did not clear.");
+                        Notification.ShowError("Sony camera is stuck mid-capture and would not clear. Disconnect and reconnect it.");
+                        throw new SonyException($"Cannot start exposure: the camera is still busy with a previous exposure ({DescribeCaptureStatus(captureStatus)}).");
                     }
 
                     if (!IDLE_STATES.Contains(captureStatus)) {
-                        Logger.Warning($"Cannot start exposure: camera in unexpected capture status ({captureStatus}).");
-                        throw new TaskCanceledException($"Cannot start exposure: camera in unexpected capture status ({captureStatus}).");
+                        Logger.Error($"Cannot start exposure: camera in unexpected capture status ({DescribeCaptureStatus(captureStatus)}).");
+                        throw new SonyException($"Cannot start exposure: camera in unexpected capture status ({DescribeCaptureStatus(captureStatus)}).");
                     }
 
                     exposureTime = sequence.ExposureTime;
@@ -923,6 +1012,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                 // Start capture outside the capture lock to avoid blocking abort/cancel paths if the call hangs.
                 driver.StartCapture(camera.Handle, (float)exposureTime);
+
+                // Only consecutive refusals count towards a stuck capture.
+                _lastRefusedStatus = CAPTURE_STATUS_UNKNOWN;
+                _refusedStartCount = 0;
             }
         }
 
