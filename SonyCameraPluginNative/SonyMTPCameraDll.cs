@@ -266,18 +266,26 @@ namespace Sony {
         /// Accept the applied shutter speed if it is within this factor of what
         /// was asked for.
         /// <para>
-        /// Sony steps in third-stops (x1.26), so a request landing exactly
-        /// between two steps is x1.122 from the nearer one - this has to be a
-        /// little above that, and no more. It was x1.25 to begin with, which is
-        /// nearly a whole step: requests that should have moved the shutter were
-        /// accepted as already-good, so several consecutive frames in an
-        /// exposure search were taken at an identical speed. NINA reads that as
-        /// "changed the exposure, signal did not move", reports the camera
-        /// response as non-linear and stops converging - the very thing this
-        /// code exists to prevent.
+        /// This has to sit above the widest half-step in the camera's ladder and
+        /// below its narrowest whole step. Too high and a request that should
+        /// have moved the shutter is accepted as already-good, so consecutive
+        /// frames in an exposure search are taken at an identical speed - NINA
+        /// reads that as "changed the exposure, signal did not move", calls the
+        /// camera response non-linear and stops converging. Too low and a camera
+        /// already sitting on the nearest speed it has is reported as a failure.
+        /// </para>
+        /// <para>
+        /// The ladder is not the uniform third-stops (x1.26) the shutter dial
+        /// suggests. Measured from 201 readbacks on an ILCE-7S, adjacent steps
+        /// are x1.20, x1.25, x1.28 and x1.3333 - the widest being 1/60 to 1/80,
+        /// 1/30 to 1/40 and 0.6s to 0.8s. A request landing midway across a
+        /// x1.3333 gap is x1.1547 from the nearer step, so anything below that
+        /// reports a correctly-positioned camera as an error. x1.13 did exactly
+        /// that: four frames were logged as "exposure was not applied" while the
+        /// camera was in fact already on its closest available speed.
         /// </para>
         /// </summary>
-        private const double EXPOSURE_MATCH_TOLERANCE = 1.13;
+        private const double EXPOSURE_MATCH_TOLERANCE = 1.16;
 
         /// <summary>
         /// Decodes a shutter-speed property value into seconds. The value packs
