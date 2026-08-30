@@ -10,6 +10,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Sony {
@@ -43,6 +44,7 @@ namespace Sony {
         internal readonly int[] MINIMUM_DLL_VERSION = { 1, 0, 1, 17 };
 
         internal const UInt32 ERROR_SUCCESS = 0;
+        internal const UInt32 ERROR_NOT_SUPPORTED = 50;
         internal const UInt32 ERROR_RETRY = 1237;
         internal const UInt32 INVALID_HANDLE_VALUE = 0xffffffff;
 
@@ -118,11 +120,15 @@ namespace Sony {
             // Confirm the driver version meets the minimum required 1.0.1.16
             FileVersionInfo dllVersion = FileVersionInfo.GetVersionInfo(filename);
 
-            int[] v = { dllVersion.ProductMajorPart, dllVersion.ProductMinorPart, dllVersion.ProductPrivatePart, dllVersion.ProductBuildPart };
-
             if (dllVersion == null) {
                 throw new SonyException("The loaded Sony dll does not have version info - this is invalid");
             }
+
+            // Order matters: a.b.c.d maps to Major.Minor.Build.Private. Having
+            // Build and Private the wrong way round here made 1.0.0.36 compare
+            // as 1.0.36.0, which sails past the 1.0.1.17 minimum - so a driver
+            // from 2022 was being accepted and then misbehaving at runtime.
+            int[] v = { dllVersion.ProductMajorPart, dllVersion.ProductMinorPart, dllVersion.ProductBuildPart, dllVersion.ProductPrivatePart };
 
             Logger.Info($"Using Sony driver dll @ {filename} with version {dllVersion.ProductVersion}");
 
@@ -169,12 +175,6 @@ namespace Sony {
             Delegate d = Marshal.GetDelegateForFunctionPointer(GetExportedFunction(_dllHandle, functionName), delegateType);
 
             field.SetValue(this, d);
-        }
-
-        internal byte[] LastImage {
-            get {
-                return _lastImage;
-            }
         }
 
         internal IntPtr GetExportedFunction(IntPtr hDll, string name) {
@@ -252,10 +252,190 @@ namespace Sony {
             return returndata;
         }
 
-        public UInt32 StartCapture(UInt32 hDevice, float exposureTime) {
+        /// <summary>Shutter speed. A Range property: it can only be stepped, not set outright.</summary>
+        private const UInt32 PROPID_SHUTTER_SPEED = 0xD20D;
+
+        /// <summary>
+        /// How long to keep re-issuing a shutter-speed change that has not taken
+        /// effect. Sized to cover a large move: the driver steps roughly one
+        /// click per second, and 15s to 1s is a dozen clicks.
+        /// </summary>
+        private const int EXPOSURE_SETTLE_TIMEOUT_MS = 12000;
+
+        /// <summary>
+        /// Accept the applied shutter speed if it is within this factor of what
+        /// was asked for.
+        /// <para>
+        /// This has to sit above the widest half-step in the camera's ladder and
+        /// below its narrowest whole step. Too high and a request that should
+        /// have moved the shutter is accepted as already-good, so consecutive
+        /// frames in an exposure search are taken at an identical speed - NINA
+        /// reads that as "changed the exposure, signal did not move", calls the
+        /// camera response non-linear and stops converging. Too low and a camera
+        /// already sitting on the nearest speed it has is reported as a failure.
+        /// </para>
+        /// <para>
+        /// The ladder is not the uniform third-stops (x1.26) the shutter dial
+        /// suggests. Measured from 201 readbacks on an ILCE-7S, adjacent steps
+        /// are x1.20, x1.25, x1.28 and x1.3333 - the widest being 1/60 to 1/80,
+        /// 1/30 to 1/40 and 0.6s to 0.8s. A request landing midway across a
+        /// x1.3333 gap is x1.1547 from the nearer step, so anything below that
+        /// reports a correctly-positioned camera as an error. x1.13 did exactly
+        /// that: four frames were logged as "exposure was not applied" while the
+        /// camera was in fact already on its closest available speed.
+        /// </para>
+        /// </summary>
+        private const double EXPOSURE_MATCH_TOLERANCE = 1.16;
+
+        /// <summary>
+        /// Decodes a shutter-speed property value into seconds. The value packs
+        /// a fraction as (numerator &lt;&lt; 16) | denominator, so 0x0096000a is
+        /// 150/10 = 15s and 0x00010028 is 1/40 = 0.025s.
+        /// </summary>
+        private static bool TryDecodeShutterSpeed(UInt32 raw, out double seconds) {
+            uint numerator = raw >> 16;
+            uint denominator = raw & 0xFFFF;
+
+            if (denominator == 0 || numerator == 0 || raw == 0xFFFFFFFF) {
+                // Bulb, or something that is not a duration at all.
+                seconds = 0;
+                return false;
+            }
+
+            seconds = (double)numerator / denominator;
+            return true;
+        }
+
+        private bool TryReadShutterSpeedSeconds(UInt32 hDevice, out double seconds) {
+            seconds = 0;
+
+            try {
+                PropertyValue current = GetSinglePropertyValue(hDevice, PROPID_SHUTTER_SPEED);
+
+                return TryDecodeShutterSpeed(current.Value, out seconds);
+            } catch (Exception ex) {
+                Logger.Debug($"Unable to read back the shutter speed: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static bool ExposureMatches(double actual, double requested) {
+            if (actual <= 0 || requested <= 0) {
+                return false;
+            }
+
+            double ratio = actual > requested ? actual / requested : requested / actual;
+
+            return ratio <= EXPOSURE_MATCH_TOLERANCE;
+        }
+
+        /// <summary>
+        /// Sets the shutter speed, then confirms the camera actually took it and
+        /// re-issues the change until it does.
+        /// <para>
+        /// Shutter speed is a Range property, so the driver cannot assign it -
+        /// it steps the camera one click at a time toward the target. If the
+        /// first step has no effect the driver concludes it cannot move and
+        /// starts the capture at the old speed anyway ("letting camera figure it
+        /// out" in its log). That is exactly what happens when exposures are
+        /// taken back to back: the camera ignores the step for a moment after
+        /// handing over the previous frame. From the driver log, asked for
+        /// 0.5s down to 0.0078s, every frame was taken at 1s:
+        /// </para>
+        /// <code>
+        /// 17:29:43.569 Property xd20d is set to x000a000a, nudging x00000001 toward x0005000a
+        /// 17:29:45.691 Shutter time is x000a000a (1.000000 s), we wanted (0.501090 s)
+        /// </code>
+        /// <para>
+        /// Re-issuing works because each call steps again, and once the camera
+        /// is responsive the driver walks all the way to the target.
+        /// </para>
+        /// </summary>
+        private void ApplyExposureTime(UInt32 hDevice, float exposureTime) {
             PropertyValue value = new PropertyValue();
 
-            fSetExposureTime(hDevice, exposureTime, ref value);
+            uint hr = fSetExposureTime(hDevice, exposureTime, ref value);
+
+            if (hr == ERROR_NOT_SUPPORTED) {
+                // The driver returns this when the camera has no learnt
+                // exposure-time list, in which case it cannot drive the shutter
+                // at all and the speed set on the body is used as-is. That is
+                // how those cameras have always worked, so do not fail.
+                Logger.Warning($"The driver cannot set the exposure time on this camera (no learnt exposure-time list), so {exposureTime}s was not applied - the camera's own shutter speed will be used. Run SonyCameraInfo with the camera connected to learn its exposure times.");
+                return;
+            }
+
+            if (hr != ERROR_SUCCESS) {
+                throw new SonyException($"Unable to set exposure time to {exposureTime}s, error {hr}");
+            }
+
+            if (!TryReadShutterSpeedSeconds(hDevice, out double actual)) {
+                // Bulb, or a value that is not a plain duration - nothing to
+                // verify against.
+                return;
+            }
+
+            if (ExposureMatches(actual, exposureTime)) {
+                Logger.Debug($"Exposure time requested {exposureTime}s; camera is at {actual}s.");
+                return;
+            }
+
+            Stopwatch elapsed = Stopwatch.StartNew();
+            double previous = actual;
+            int attempts = 0;
+            int withoutProgress = 0;
+            bool everMoved = false;
+
+            while (elapsed.ElapsedMilliseconds < EXPOSURE_SETTLE_TIMEOUT_MS) {
+                attempts++;
+
+                hr = fSetExposureTime(hDevice, exposureTime, ref value);
+
+                if (hr != ERROR_SUCCESS) {
+                    break;
+                }
+
+                if (!TryReadShutterSpeedSeconds(hDevice, out actual)) {
+                    return;
+                }
+
+                if (ExposureMatches(actual, exposureTime)) {
+                    Logger.Info($"Exposure time {exposureTime}s took {attempts} extra attempt(s) over {elapsed.ElapsedMilliseconds}ms to reach the camera; it is now at {actual}s.");
+                    return;
+                }
+
+                if (actual == previous) {
+                    // The camera is not moving. Give it a moment - this is
+                    // normally because it is still busy with the last frame.
+                    // A stalled attempt already costs ~2s inside the driver
+                    // (NudgePropertyAndWait waits 40 x 50ms for the property to
+                    // change), so let the overall time budget decide when to
+                    // stop rather than this counter.
+                    if (++withoutProgress >= 5) {
+                        break;
+                    }
+
+                    Thread.Sleep(300);
+                } else {
+                    everMoved = true;
+                    withoutProgress = 0;
+                    previous = actual;
+                }
+            }
+
+            if (everMoved) {
+                // The camera moved and then settled, so this is as close as its
+                // shutter steps allow. Not a failure - but say what will
+                // actually be exposed, because it is not what was asked for.
+                Logger.Info($"Exposure time {exposureTime}s is not available on this camera; the closest it can do is {actual}s, which is what this frame will be exposed at.");
+                return;
+            }
+
+            Logger.Error($"Exposure time was not applied: asked for {exposureTime}s but the camera never moved off {actual}s after {attempts} attempt(s) over {elapsed.ElapsedMilliseconds}ms. This frame will be exposed at {actual}s, not {exposureTime}s.");
+        }
+
+        public UInt32 StartCapture(UInt32 hDevice, float exposureTime) {
+            ApplyExposureTime(hDevice, exposureTime);
 
             ImageInfo info = new ImageInfo {
                 ImageMode = IMAGEMODE_PASSTHRU,
@@ -275,6 +455,30 @@ namespace Sony {
             fCancelCapture(hDevice, ref Info);
         }
 
+        /// <summary>
+        /// Reads the capture status, and takes the finished frame with it.
+        /// <para>
+        /// The copy has to happen here and cannot be deferred to download time.
+        /// The driver's GetCaptureStatus is a one-shot for a completed capture:
+        /// the first call that reports STATUS_COMPLETE fetches the image and
+        /// then resets its own status to STATUS_CANCELLED, so a second call
+        /// returns 3 and the frame is gone. From the driver log:
+        /// </para>
+        /// <code>
+        /// 16:52:34.083 Set capture status to: 4
+        /// 16:52:34.145 Camera::GetCaptureStatus() - Capture Complete
+        /// 16:52:34.164 In:: Image::GetImageData
+        /// 16:52:34.171 Set capture status to: 3
+        /// 16:52:34.177 Camera::GetCaptureStatus() - Capture Cancelled
+        /// </code>
+        /// <para>
+        /// That also means only one caller can ever observe the completed
+        /// state, so the frame is copied exactly once per capture regardless.
+        /// A fresh array each time is deliberate: NINA saves the previous frame
+        /// asynchronously, so reusing one buffer would let the next capture
+        /// overwrite an image still being written to disk.
+        /// </para>
+        /// </summary>
         public UInt32 GetCaptureStatus(UInt32 hDevice) {
             ImageInfo info = new ImageInfo();
 
@@ -282,18 +486,32 @@ namespace Sony {
                 throw new SonyException("Unable to get image status");
             }
 
-            // If the capture is complete, copy the image
-            if (info.Status == STATUS_COMPLETE) {
-                _lastImage = new byte[info.ImageSize];
+            if (info.Status == STATUS_COMPLETE && info.ImageData != IntPtr.Zero && info.ImageSize > 0) {
+                byte[] image = new byte[info.ImageSize];
 
-                if (_lastImage == null) {
-                    throw new SonyException("Unable to allocate memory for image");
-                }
+                Marshal.Copy(info.ImageData, image, 0, (Int32)info.ImageSize);
 
-                Marshal.Copy(info.ImageData, _lastImage, 0, (Int32)info.ImageSize);
+                _lastImage = image;
             }
 
             return info.Status;
+        }
+
+        /// <summary>
+        /// Hands over the frame taken by the last <see cref="GetCaptureStatus"/>
+        /// that saw a completed capture, and forgets it. Nulling it here is what
+        /// stops a cancelled or failed exposure from being served the previous
+        /// frame a second time.
+        /// </summary>
+        internal byte[] TakeLastImage() {
+            // Interlocked because the copy is written by whichever thread polled
+            // the capture status, and read by NINA's download task.
+            return Interlocked.Exchange(ref _lastImage, null);
+        }
+
+        /// <summary>Drops any frame left over from a previous capture.</summary>
+        internal void DiscardLastImage() {
+            Interlocked.Exchange(ref _lastImage, null);
         }
 
         public CameraInfo GetCameraInfo(UInt32 hDevice, UInt32 Flags) {

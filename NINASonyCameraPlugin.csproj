@@ -9,9 +9,11 @@
     <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="ReachFramework" />
-  </ItemGroup>
-  <ItemGroup>
+    <!--
+      ReachFramework used to be listed as a bare <Reference>, which the SDK
+      cannot resolve on net8.0-windows (MSB3245/MSB3243 on every build). WPF
+      projects get it from <UseWPF>, so the explicit reference is not needed.
+    -->
     <PackageReference Include="NINA.Plugin" Version="3.2.0.3001-rc" />
     <PackageReference Include="System.ComponentModel.Composition" Version="8.0.0" />
     <PackageReference Include="System.Data.DataSetExtensions" Version="4.6.0-preview3.19128.7" />
