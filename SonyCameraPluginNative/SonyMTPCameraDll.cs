@@ -231,25 +231,59 @@ namespace Sony {
             fCloseDevice(hDevice);
         }
 
+        /// <summary>
+        /// Releases the unmanaged buffers the driver returns inside an
+        /// <see cref="ImageInfo"/>.
+        /// <para>
+        /// The driver fills ImageData and MetaData with CoTaskMemAlloc and hands
+        /// ownership to the caller - the usual COM convention, and the one this
+        /// class already follows for the device-id list in GetDeviceIds. Nothing
+        /// was releasing the image buffers, so every frame leaked its full size.
+        /// </para>
+        /// <para>
+        /// Freeing a null pointer is a documented no-op, so this is safe on any
+        /// ImageInfo whatever the driver populated, and safe to call twice.
+        /// </para>
+        /// </summary>
+        private static void FreeImageInfo(ref ImageInfo info) {
+            if (info.ImageData != IntPtr.Zero) {
+                Marshal.FreeCoTaskMem(info.ImageData);
+                info.ImageData = IntPtr.Zero;
+            }
+
+            if (info.MetaData != IntPtr.Zero) {
+                Marshal.FreeCoTaskMem(info.MetaData);
+                info.MetaData = IntPtr.Zero;
+            }
+        }
+
         public byte[] GetPreviewImage(UInt32 hDevice) {
             ImageInfo info = new ImageInfo {
                 ImageMode = IMAGEMODE_JPEG
             };
-            uint hr = fGetPreviewImage(hDevice, ref info);
 
-            if (hr != ERROR_SUCCESS) {
-                throw new SonyException($"Unable to get preview image, error {hr}");
+            try {
+                uint hr = fGetPreviewImage(hDevice, ref info);
+
+                if (hr != ERROR_SUCCESS) {
+                    throw new SonyException($"Unable to get preview image, error {hr}");
+                }
+
+                byte[] returndata = new byte[info.ImageSize];
+
+                if (returndata == null) {
+                    throw new SonyException("Unable to allocate memory for image");
+                }
+
+                Marshal.Copy(info.ImageData, returndata, 0, (Int32)info.ImageSize);
+
+                return returndata;
+            } finally {
+                // finally, not a straight-line call: the throws above are
+                // reachable with a buffer already allocated, and liveview runs
+                // this many times a second.
+                FreeImageInfo(ref info);
             }
-
-            byte[] returndata = new byte[info.ImageSize];
-
-            if (returndata == null) {
-                throw new SonyException("Unable to allocate memory for image");
-            }
-
-            Marshal.Copy(info.ImageData, returndata, 0, (Int32)info.ImageSize);
-
-            return returndata;
         }
 
         public UInt32 StartCapture(UInt32 hDevice, float exposureTime) {
@@ -262,38 +296,59 @@ namespace Sony {
                 ExposureTime = (double)exposureTime,
             };
 
-            if (fStartCapture(hDevice, ref info) != ERROR_SUCCESS) {
-                throw new SonyException("Problem starting capture");
-            }
+            try {
+                if (fStartCapture(hDevice, ref info) != ERROR_SUCCESS) {
+                    throw new SonyException("Problem starting capture");
+                }
 
-            return info.Status;
+                return info.Status;
+            } finally {
+                // Not expected to return a buffer, but it is handed the same
+                // struct and checking two null pointers costs nothing next to
+                // silently leaking one.
+                FreeImageInfo(ref info);
+            }
         }
 
         public void CancelCapture(UInt32 hDevice) {
-            ImageInfo Info = new ImageInfo();
+            ImageInfo info = new ImageInfo();
 
-            fCancelCapture(hDevice, ref Info);
+            try {
+                fCancelCapture(hDevice, ref info);
+            } finally {
+                FreeImageInfo(ref info);
+            }
         }
 
         public UInt32 GetCaptureStatus(UInt32 hDevice) {
             ImageInfo info = new ImageInfo();
 
-            if (fGetCaptureStatus(hDevice, ref info) != ERROR_SUCCESS) {
-                throw new SonyException("Unable to get image status");
-            }
-
-            // If the capture is complete, copy the image
-            if (info.Status == STATUS_COMPLETE) {
-                _lastImage = new byte[info.ImageSize];
-
-                if (_lastImage == null) {
-                    throw new SonyException("Unable to allocate memory for image");
+            try {
+                if (fGetCaptureStatus(hDevice, ref info) != ERROR_SUCCESS) {
+                    throw new SonyException("Unable to get image status");
                 }
 
-                Marshal.Copy(info.ImageData, _lastImage, 0, (Int32)info.ImageSize);
-            }
+                // If the capture is complete, copy the image
+                if (info.Status == STATUS_COMPLETE) {
+                    _lastImage = new byte[info.ImageSize];
 
-            return info.Status;
+                    if (_lastImage == null) {
+                        throw new SonyException("Unable to allocate memory for image");
+                    }
+
+                    Marshal.Copy(info.ImageData, _lastImage, 0, (Int32)info.ImageSize);
+                }
+
+                return info.Status;
+            } finally {
+                // This is the leak that mattered: the driver allocates the frame
+                // here on every completed capture, and the copy above puts it in
+                // managed memory, so the unmanaged original is dead the moment
+                // Marshal.Copy returns. Freeing in finally also covers the paths
+                // that skip the copy - a cancelled or failed capture can still
+                // arrive with a buffer attached.
+                FreeImageInfo(ref info);
+            }
         }
 
         public CameraInfo GetCameraInfo(UInt32 hDevice, UInt32 Flags) {
