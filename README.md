@@ -27,7 +27,7 @@ https://github.com/dougforpres/NINASonyCameraPlugin/releases
 ## Usage notes
 
 - ISO/gain list may be empty until the camera has learned ISO options; set an ISO on-camera once if needed.
-- Temperature is not reported (the plugin does not request processed ARW metadata).
+- Temperature shows the **camera temperature from the most recently downloaded ARW**, when Sony records a valid `CameraTemperature` maker note. It updates after each photo and is unavailable before the first photo, after reconnecting, or when the latest image lacks that reading. It is not a live sensor probe, a battery/ambient reading, or a cooling control. The same per-image reading is supplied to NINA's image metadata; the original ARW remains unchanged.
 - Binning and sub-sampling are not supported; captures use the full sensor frame.
 - For exposures <= 30s the driver chooses the nearest built-in shutter speed; longer exposures fall back to Bulb.
 - Powering off/unplugging the camera while connected can crash NINA via Windows' MTP stack (PortableDeviceApi.dll access violation); disconnect in NINA first to avoid it.

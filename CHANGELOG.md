@@ -1,5 +1,8 @@
 ﻿# Sony Camera Plugin
 
+## Unreleased
+* Report the latest downloaded ARW's Sony camera temperature in NINA and supply the same reading to that image's metadata. Missing or invalid readings remain unavailable; reconnecting clears the cached value.
+
 ## 1.0.0.4
 * Added the `UpdateSubSampleArea` implementation and bumped the minimum NINA version so the plugin loads in 3.2.
 * Restored the ISO/Gain UI by notifying NINA whenever the camera connection updates ISO data and by handling cameras without ISO option lists.
