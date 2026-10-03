@@ -30,7 +30,18 @@ https://github.com/dougforpres/NINASonyCameraPlugin/releases
 - Temperature is not reported (the plugin does not request processed ARW metadata).
 - Binning and sub-sampling are not supported; captures use the full sensor frame.
 - For exposures <= 30s the driver chooses the nearest built-in shutter speed; longer exposures fall back to Bulb.
+- To keep a copy on the camera's memory card as well as sending it to NINA, use the camera's **PC Remote Settings → Still Img. Save Dest. → PC+Camera** setting (see below).
 - Powering off/unplugging the camera while connected can crash NINA via Windows' MTP stack (PortableDeviceApi.dll access violation); disconnect in NINA first to avoid it.
+
+## Keeping copies on the camera's memory card
+
+Saving to both NINA and the camera's memory card is controlled by the camera. Configure these settings before connecting the camera in NINA:
+
+1. Insert a writable memory card and open the camera's **PC Remote Settings**.
+2. Set **Still Img. Save Dest.** to **PC+Camera**. **PC Only** sends the image to the computer without retaining a copy on the card.
+3. If the camera offers **RAW+J PC Save Img**, choose **RAW** or **RAW & JPEG** so NINA receives the RAW image.
+
+Menu locations and labels vary by Sony model; consult your camera's manual if these options are elsewhere. For an example, see Sony's [Still Img. Save Dest. help page for the A7 III](https://helpguide.sony.net/ilc/1720/v1/en/contents/TP0001661953.html). The camera's choice controls the copy on the card, while NINA's image-saving settings control the copy on the computer.
 
 ## Support
 
