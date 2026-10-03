@@ -28,7 +28,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public FocuserProvider(IProfileService profileService) {
             this.profileService = profileService;
 
-            if (!DllLoader.IsX86()) {
+            if (!SimulatedSonyCameraBackend.Enabled && !DllLoader.IsX86()) {
                 try {
                     this.driver = SonyDriver.GetInstance();
                 } catch (Exception ex) {

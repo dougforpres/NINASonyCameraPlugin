@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <Compile Include="..\Drivers\CaptureController.cs" Link="CaptureController.cs" />
+    <Compile Include="..\Drivers\ISonyCameraBackend.cs" Link="ISonyCameraBackend.cs" />
+    <Compile Include="..\Drivers\SimulatedSonyCameraBackend.cs" Link="SimulatedSonyCameraBackend.cs" />
+    <Compile Include="..\SonyCameraPluginNative\SonyTypes.cs" Link="SonyTypes.cs" />
+    <Compile Include="..\SonyCameraPluginNative\SonyCameraInfo.cs" Link="SonyCameraInfo.cs" />
+    <Compile Include="..\SonyCameraPluginNative\SonyDevice.cs" Link="SonyDevice.cs" />
+  </ItemGroup>
+</Project>

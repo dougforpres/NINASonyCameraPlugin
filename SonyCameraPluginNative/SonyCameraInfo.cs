@@ -5,7 +5,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Drawing;
-using NINA.Core.Utility;
 
 namespace Sony {
     public class Size {
