@@ -40,6 +40,7 @@
     <PackageReference Include="Zlib.Portable.Signed" Version="1.11.0" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Remove="Tests\**\*.cs" />
     <Compile Remove="SonyCameraPluginNative\obj\Debug\.NETFramework,Version=v4.8.AssemblyAttributes.cs" />
     <Compile Remove="SonyCameraPluginNative\obj\Release\.NETFramework,Version=v4.8.AssemblyAttributes.cs" />
   </ItemGroup>
@@ -68,7 +69,7 @@
     </None>
   </ItemGroup>
   <PropertyGroup />
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(OS)' == 'Windows_NT'">
     <Exec Command="if not exist &quot;%25localappdata%25\NINA\Plugins\3.0.0&quot; (&#xA;  echo &quot;Creating $(PlatformName) Plugins folder&quot;&#xA;  mkdir &quot;%25localappdata%25\NINA\Plugins\3.0.0&quot;&#xA;)&#xA;if not exist &quot;%25localappdata%25\NINA\Plugins\3.0.0\$(TargetName)&quot; (&#xA;  echo &quot;Creating $(PlatformName) Plugins $(TargetName) folder&quot;&#xA;  mkdir &quot;%25localappdata%25\NINA\Plugins\3.0.0\$(TargetName)&quot;&#xA;)&#xA;&#xA;echo &quot;Copying $(PlatformName) $(TargetFileName)&quot;&#xA;xcopy &quot;$(TargetPath)&quot; &quot;%25localappdata%25\NINA\Plugins\3.0.0\$(TargetName)&quot; /h/i/c/k/e/r/y" />
   </Target>
 </Project>

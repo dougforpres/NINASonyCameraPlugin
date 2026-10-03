@@ -1,4 +1,12 @@
-﻿# Sony Camera Plugin
+# Sony Camera Plugin
+
+## 1.0.0.5
+
+* Added a profile-specific native cancel option, defaulted to off to avoid abort-related crashes.
+* Serialized native capture starts and status/cancel calls; busy or unknown states reject new exposures without cancelling the previous capture.
+* Made aborts idempotent, kept their lock wait bounded, and prevented delayed aborts from cancelling a newer exposure.
+* Reported cancelled and failed captures correctly rather than downloading a stale image.
+* Added automated capture coordination regression tests.
 
 ## 1.0.0.4
 * Added the `UpdateSubSampleArea` implementation and bumped the minimum NINA version so the plugin loads in 3.2.

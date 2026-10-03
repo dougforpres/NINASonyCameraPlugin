@@ -28,6 +28,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
     /// </summary>
     [Export(typeof(IPluginManifest))]
     public class SonyCamera : PluginBase, INotifyPropertyChanged {
+        public static readonly Guid PluginGuid = Guid.Parse("f3fd7bb5-2b69-40cc-846f-4f4a2ff62518");
         private readonly IPluginOptionsAccessor pluginSettings;
         private readonly IProfileService profileService;
         private readonly IImageSaveMediator imageSaveMediator;
@@ -44,7 +45,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
             }
 
             // This helper class can be used to store plugin settings that are dependent on the current profile
-            this.pluginSettings = new PluginOptionsAccessor(profileService, Guid.Parse(this.Identifier));
+            this.pluginSettings = new PluginOptionsAccessor(profileService, PluginGuid);
             this.profileService = profileService;
             // React on a changed profile
             profileService.ProfileChanged += ProfileService_ProfileChanged;
@@ -72,6 +73,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
         private void ProfileService_ProfileChanged(object sender, EventArgs e) {
             // Rase the event that this profile specific value has been changed due to the profile switch
             RaisePropertyChanged(nameof(ProfileSpecificNotificationMessage));
+            RaisePropertyChanged(nameof(EnableNativeCancel));
         }
 
         private Task ImageSaveMediator_BeforeImageSaved(object sender, BeforeImageSavedEventArgs e) {
@@ -128,6 +130,17 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
             }
             set {
                 pluginSettings.SetValueString(nameof(ProfileSpecificNotificationMessage), value);
+                RaisePropertyChanged();
+            }
+        }
+
+        public bool EnableNativeCancel {
+            get {
+                var raw = pluginSettings.GetValueString(nameof(EnableNativeCancel), bool.FalseString);
+                return bool.TryParse(raw, out var enabled) && enabled;
+            }
+            set {
+                pluginSettings.SetValueString(nameof(EnableNativeCancel), value.ToString());
                 RaisePropertyChanged();
             }
         }
